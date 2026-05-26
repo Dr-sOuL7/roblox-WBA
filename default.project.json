@@ -2,8 +2,30 @@
   "name": "Roblox WBA",
   "tree": {
     "$className": "DataModel",
+    "ServerScriptService": {
+      "$className": "ServerScriptService",
+      "$path": "src/ServerScriptService"
+    },
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "StarterPlayerScripts": {
+        "$path": "src/StarterPlayerScripts"
+      }
+    },
     "ReplicatedStorage": {
       "$className": "ReplicatedStorage",
+      "Constants": {
+        "$path": "src/ReplicatedStorage/Constants.lua"
+      },
+      "MatchState": {
+        "$path": "src/ReplicatedStorage/MatchState.lua"
+      },
+      "Remotes": {
+        "$path": "src/ReplicatedStorage/Remotes.lua"
+      },
+      "Types": {
+        "$path": "src/ReplicatedStorage/Types.lua"
+      },
       "Shared": {
         "$path": "src/Shared"
       },
@@ -26,25 +48,10 @@
         "$path": "Packages"
       }
     },
-    "ServerScriptService": {
-      "$className": "ServerScriptService",
-      "Server": {
-        "$path": "src/Server"
-      },
-      "ServerPackages": {
-        "$path": "ServerPackages"
-      }
-    },
     "ServerStorage": {
       "$className": "ServerStorage",
       "ServerShared": {
         "$path": "src/ServerShared"
-      }
-    },
-    "StarterPlayer": {
-      "$className": "StarterPlayer",
-      "StarterPlayerScripts": {
-        "$path": "src/Client"
       }
     }
   }
