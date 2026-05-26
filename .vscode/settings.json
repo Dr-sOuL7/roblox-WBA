@@ -1,0 +1,17 @@
+{
+    "luau-lsp.require.mode": "relativeToFile",
+    "luau-lsp.require.fileAliases": {
+        "@pkg": "Packages"
+    },
+    "luau-lsp.sourcemap.enabled": true,
+    "luau-lsp.sourcemap.autogenerate": false,
+    "luau-lsp.types.roblox": true,
+    "luau-lsp.completion.imports": true,
+    "editor.formatOnSave": true,
+    "editor.formatOnType": false,
+    "[luau]": {
+        "editor.defaultFormatter": "JohnnyMorganz.stylua",
+        "editor.formatOnSave": true
+    },
+    "selene.config": "selene.toml"
+}

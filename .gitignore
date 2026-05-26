@@ -1,0 +1,17 @@
+# Wally
+Packages/
+ServerPackages/
+_Index/
+wally.lock
+
+# VSCode
+# .vscode/
+
+# Rojo
+sourcemap.json
+
+# Aftman
+.aftman/
+
+# MacOS
+.DS_Store

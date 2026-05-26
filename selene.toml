@@ -1,0 +1,5 @@
+std = "roblox"
+
+[rules]
+empty_if = "allow"
+global_usage = "allow"

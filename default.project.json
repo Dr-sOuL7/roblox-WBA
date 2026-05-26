@@ -1,0 +1,51 @@
+{
+  "name": "Roblox WBA",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "Shared": {
+        "$path": "src/Shared"
+      },
+      "ReplicatedShared": {
+        "$path": "src/ReplicatedShared"
+      },
+      "Networking": {
+        "$path": "src/Networking"
+      },
+      "Debug": {
+        "$path": "src/Debug"
+      },
+      "Gameplay": {
+        "$path": "src/Gameplay"
+      },
+      "Runtime": {
+        "$path": "src/Runtime"
+      },
+      "Packages": {
+        "$path": "Packages"
+      }
+    },
+    "ServerScriptService": {
+      "$className": "ServerScriptService",
+      "Server": {
+        "$path": "src/Server"
+      },
+      "ServerPackages": {
+        "$path": "ServerPackages"
+      }
+    },
+    "ServerStorage": {
+      "$className": "ServerStorage",
+      "ServerShared": {
+        "$path": "src/ServerShared"
+      }
+    },
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "StarterPlayerScripts": {
+        "$path": "src/Client"
+      }
+    }
+  }
+}
