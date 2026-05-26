@@ -20,9 +20,9 @@ end
 
 -- Collision audio by severity
 local COLLISION_SOUNDS = {
-	Light = { id = "rbxassetid://131154564", pitch = 1.3, volume = 0.25 },
-	Heavy = { id = "rbxassetid://131154564", pitch = 1.0, volume = 0.6 },
-	Smash = { id = "rbxassetid://131154564", pitch = 0.7, volume = 1.0 },
+	Light = { id = "rbxassetid://186884155", pitch = 1.3, volume = 0.25 },
+	Heavy = { id = "rbxassetid://186884155", pitch = 1.0, volume = 0.6 },
+	Smash = { id = "rbxassetid://186884155", pitch = 0.7, volume = 1.0 },
 }
 
 local function playCollisionSound(severity)
@@ -49,7 +49,7 @@ local function updateSpinDownAudio(pid, angularMagnitude)
 		-- Should be playing spin-down
 		if not spinDownSounds[pid] then
 			local sound = Instance.new("Sound")
-			sound.SoundId = "rbxassetid://131154564" -- Placeholder grinding
+			sound.SoundId = "rbxassetid://186884155" -- Placeholder grinding
 			sound.Looped = true
 			sound.Volume = 0
 			sound.PlaybackSpeed = 0.4
