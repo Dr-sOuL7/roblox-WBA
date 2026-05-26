@@ -1,8 +1,11 @@
 {
     "recommendations": [
         "JohnnyMorganz.luau-lsp",
-        "Kampfkarren.selene-vscode",
         "JohnnyMorganz.stylua",
-        "evaera.vscode-rojo"
+        "Kampfkarren.selene-vscode",
+        "evaera.vscode-rojo",
+        "eamodio.gitlens",
+        "usernamehw.errorlens",
+        "tamasfe.even-better-toml"
     ]
 }

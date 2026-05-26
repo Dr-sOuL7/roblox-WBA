@@ -4,7 +4,11 @@
         "@pkg": "Packages"
     },
     "luau-lsp.sourcemap.enabled": true,
-    "luau-lsp.sourcemap.autogenerate": false,
+    "luau-lsp.sourcemap.autogenerate": true,
+    "luau-lsp.sourcemap.rojoProjectFile": "default.project.json",
+    "files.associations": {
+        "*.luau": "luau"
+    },
     "luau-lsp.types.roblox": true,
     "luau-lsp.completion.imports": true,
     "editor.formatOnSave": true,
