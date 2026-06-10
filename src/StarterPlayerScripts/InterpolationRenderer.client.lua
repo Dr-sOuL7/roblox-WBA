@@ -28,9 +28,17 @@ local function ensureVisuals(pid)
 	return beyVisuals[pid]
 end
 
+-- Bey models are destroyed and rebuilt every rematch, taking attached effect
+-- instances with them. A destroyed instance has Parent == nil and can never be
+-- reparented, so cached references must be dropped and recreated or the glow,
+-- warning box, and audio silently stop working from the second match onward.
+local function isDead(instance)
+	return instance == nil or instance.Parent == nil
+end
+
 local function ensureCommandGlow(pid, model)
 	local vis = beyVisuals[pid]
-	if vis.commandGlow then return vis.commandGlow end
+	if not isDead(vis.commandGlow) then return vis.commandGlow end
 	local pivot = model:FindFirstChild("Pivot") or model.PrimaryPart
 	if not pivot then return nil end
 	local light = Instance.new("PointLight")
@@ -45,7 +53,7 @@ end
 
 local function ensureRingOutBox(pid, model)
 	local vis = beyVisuals[pid]
-	if vis.ringOutBox then return vis.ringOutBox end
+	if not isDead(vis.ringOutBox) then return vis.ringOutBox end
 	local box = Instance.new("SelectionBox")
 	box.Name = "RingOutWarning"
 	box.Color3 = Color3.fromRGB(255, 60, 0)
@@ -95,6 +103,11 @@ local function updateSpinDownAudio(pid, angMag)
 	if not beyVisuals[pid] then return end
 	local model = getBeyModel(pid)
 	if not model then return end
+
+	-- Drop references to sounds destroyed with last match's Bey model
+	if spinDownSounds[pid] and spinDownSounds[pid].Parent == nil then
+		spinDownSounds[pid] = nil
+	end
 
 	if angMag < Constants.SpinDownAudioThreshold and angMag > Constants.MinEffectiveSpinThreshold then
 		if not spinDownSounds[pid] then

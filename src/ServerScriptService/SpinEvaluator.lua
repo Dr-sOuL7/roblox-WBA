@@ -17,8 +17,11 @@ function SpinEvaluator.OnEvaluationPhase(matchState)
 		local bState = matchState.beyStates[pid]
 		if bState.zoneState == "Finished" then continue end
 
-		-- Natural spin decay
-		bState.angularVelocity *= Constants.AngularDecay
+		-- Natural spin decay, accelerated by accumulated damage: a destabilized
+		-- Bey scrubs energy faster (StabilitySpinDrainMax at stability 0).
+		local stabilityFraction = math.clamp(bState.stability / Constants.BaseStability, 0, 1)
+		local drainExponent = 1 + Constants.StabilitySpinDrainMax * (1 - stabilityFraction)
+		bState.angularVelocity *= Constants.AngularDecay ^ drainExponent
 		local rpm = bState.angularVelocity.Magnitude
 
 		local stabilityRatio = bState.stability / Constants.BaseStability
@@ -46,7 +49,9 @@ function SpinEvaluator.OnEvaluationPhase(matchState)
 
 				local reason = (rpm < Constants.MinEffectiveSpinThreshold) and "SpinOut" or "WobbleCollapse"
 				bState.finishReason = reason
-				print(string.format("[SpinEvaluator] Bey %d finished: %s (RPM: %.1f, Tilt: %.1f)", pid, reason, rpm, bState.tilt))
+				if not matchState.isHeadless then
+					print(string.format("[SpinEvaluator] Bey %d finished: %s (RPM: %.1f, Tilt: %.1f)", pid, reason, rpm, bState.tilt))
+				end
 
 				table.insert(matchState.tickEvents, {
 					eventType = "BeyFinished",

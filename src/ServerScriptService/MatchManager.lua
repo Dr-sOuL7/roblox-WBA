@@ -192,9 +192,15 @@ function MatchManager.StartNewMatch(playerIds)
 
 	for i, pid in ipairs(playerIds) do
 		local bState = MatchState.createBeyState(pid)
-		-- Launch the Beys from high above the stadium (Y=10)
-		bState.position = Vector3.new((i == 1) and -10 or 10, 10, 0)
-		bState.velocity = Vector3.new(0, 0, (i == 1) and 60 or -60)
+		-- Spawn high above the bowl (Y=10); gentle pre-launch drift only.
+		-- The player's launch input supplies the real impulse.
+		local side = (i == 1) and -1 or 1
+		bState.position = Vector3.new(side * 10, 10, 0)
+		bState.velocity = Vector3.new(
+			-side * Constants.SpawnInwardSpeed,
+			0,
+			-side * Constants.SpawnTangentialSpeed
+		)
 		bState.previousPosition = bState.position
 		newState.beyStates[pid] = bState
 

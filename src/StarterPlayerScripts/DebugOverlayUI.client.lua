@@ -1,6 +1,10 @@
 -- src/StarterPlayerScripts/DebugOverlayUI.client.lua
+-- Developer overlay. Hidden by default so readability sessions see a clean
+-- screen (the Phase 1 legibility gate asks whether players can read the match
+-- WITHOUT debug aids). Toggle with F2.
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
 local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
 
 local player = Players.LocalPlayer
@@ -9,6 +13,7 @@ local playerGui = player:WaitForChild("PlayerGui")
 local gui = Instance.new("ScreenGui")
 gui.Name = "BeyArenaDebugOverlay"
 gui.ResetOnSpawn = false
+gui.Enabled = false
 
 local textLabel = Instance.new("TextLabel")
 textLabel.Size = UDim2.new(0, 300, 0, 400)
@@ -23,6 +28,14 @@ textLabel.Font = Enum.Font.Code
 textLabel.Parent = gui
 
 gui.Parent = playerGui
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	if input.KeyCode == Enum.KeyCode.F2 then
+		gui.Enabled = not gui.Enabled
+		print(string.format("[DebugOverlay] %s", gui.Enabled and "ON" or "OFF"))
+	end
+end)
 
 Remotes.StateSnapshot.OnClientEvent:Connect(function(snapshot)
     local display = "--- BEY ARENA DEBUG ---\n"

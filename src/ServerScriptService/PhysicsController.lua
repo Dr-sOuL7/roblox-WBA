@@ -67,7 +67,11 @@ local function doCollisionSubStep(matchState)
 					spinDmgMultiplier = Constants.SpinDamageMultiplierHeavy
 				end
 
-				local basePush = math.max(Constants.CollisionPushMin, impactSpeed * Constants.CollisionPushMultiplier)
+				local basePush = math.clamp(
+					impactSpeed * Constants.CollisionPushMultiplier,
+					Constants.CollisionPushMin,
+					Constants.CollisionPushMax
+				)
 				-- Attack: only the attacker absorbs amplified recoil; opponent receives base push
 				local pushForceA = basePush * (bA.currentCommand == "Attack" and Constants.CommandRecoilMultiplier or 1)
 				local pushForceB = basePush * (bB.currentCommand == "Attack" and Constants.CommandRecoilMultiplier or 1)
@@ -183,9 +187,24 @@ function PhysicsController.OnPhysicsPhase(matchState)
 						bState.velocity += toCenter * Constants.CommandDefendForce * subDt
 					end
 				elseif cmd == "Evade" then
-					local awayFromOpponent = (bState.position - opponentState.position).Unit
-					if awayFromOpponent == awayFromOpponent then
-						bState.velocity += awayFromOpponent * Constants.CommandEvadeForce * subDt
+					-- Matador dodge: mostly sidestep, slight separation. A radial
+					-- flee just runs up the bowl wall and corners the evader at
+					-- the rim (harness: Attack beat radial-Evade 72/21). The
+					-- tangential sidestep makes the attacker's lunge overshoot —
+					-- their momentum, not the evader's, carries toward the rim.
+					local away = bState.position - opponentState.position
+					local awayFlat = Vector3.new(away.X, 0, away.Z).Unit
+					if awayFlat == awayFlat then
+						local tangent = Vector3.new(-awayFlat.Z, 0, awayFlat.X)
+						-- Sidestep toward the side that curves away from the rim
+						if toCenter == toCenter and tangent:Dot(toCenter) < 0 then
+							tangent = -tangent
+						end
+						local dodge = (awayFlat * Constants.EvadeRadialWeight
+							+ tangent * Constants.EvadeTangentialWeight).Unit
+						if dodge == dodge then
+							bState.velocity += dodge * Constants.CommandEvadeForce * subDt
+						end
 					end
 				end
 			end

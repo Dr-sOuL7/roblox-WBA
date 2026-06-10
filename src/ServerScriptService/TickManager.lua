@@ -52,10 +52,21 @@ function TickManager.GetRandom()
 	return TickManager._randomGenerator
 end
 
+-- Phase errors are swallowed by pcall isolation; the harness stability gate
+-- needs them counted, not just warned.
+TickManager._phaseErrorCount = 0
+
+function TickManager.GetAndResetPhaseErrorCount(): number
+	local count = TickManager._phaseErrorCount
+	TickManager._phaseErrorCount = 0
+	return count
+end
+
 local function executePhase(phaseName: string, matchState)
 	for _, handlerFn in ipairs(TickManager._phases[phaseName]) do
 		local success, err = pcall(handlerFn, matchState)
 		if not success then
+			TickManager._phaseErrorCount += 1
 			warn(string.format("[TickManager] Error in Phase '%s' — %s", phaseName, tostring(err)))
 		end
 	end
