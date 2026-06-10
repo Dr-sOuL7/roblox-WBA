@@ -32,7 +32,9 @@ function MatchState.new(matchSeed: number)
         replayRefs = {},
         currentWinner = nil,
         finishFlags = {},
-        inputQueue = {}, -- Validated inputs: { inputSequenceId, playerId, data }
+        inputQueue = {},   -- Validated launch inputs: { inputSequenceId, playerId, data }
+        commandQueue = {}, -- Validated command inputs: { playerId, command }
+        playerOrder = {},  -- Sorted array of playerIds; set by MatchManager — canonical iteration order
     }
 end
 
@@ -49,7 +51,15 @@ function MatchState.createBeyState(playerId: number)
         heat = 0,
         criticalSpinTimer = 0,
         collisionFlags = {},
-        zoneState = "Center",
+        zoneState = "Active",      -- "Active" | "RingOut" | "Finished"
+        -- Command state
+        currentCommand = nil,      -- nil | "Attack" | "Defend" | "Evade"
+        commandTimer = 0,          -- ticks remaining on active command
+        commandCooldownTimer = 0,  -- ticks until next command is allowed
+        launchConsumed = false,    -- single-fire guard: only one launch per match
+        -- Ring-out state
+        ringOutTimer = 0,          -- ticks spent past the rim (grace period counter)
+        finishReason = nil,        -- "SpinOut" | "WobbleCollapse" | "RingOut"
     }
 end
 

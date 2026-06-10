@@ -1,35 +1,76 @@
--- src/ServerScriptService/LaunchValidator.lua
+--[=[
+	LaunchValidator.lua
+	Validates and queues launch inputs from clients.
+	Enforces single-fire-per-match and basic sanity bounds.
+]=]
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
 local TickManager = require(script.Parent:WaitForChild("TickManager"))
 
+-- Per-player remote rate limiting: max 1 accepted launch per match
+-- Additional guard: reject if more than RATE_LIMIT fires arrive per second
+local RATE_LIMIT_WINDOW = 1    -- seconds
+local RATE_LIMIT_MAX = 5       -- fires allowed per window before suppressing
+local _rateCounts = {}         -- { [userId] = { count, windowStart } }
+
 local LaunchValidator = {}
 
+local function checkRateLimit(userId)
+	local now = os.clock()
+	local entry = _rateCounts[userId]
+	if not entry then
+		_rateCounts[userId] = { count = 1, windowStart = now }
+		return true
+	end
+	if now - entry.windowStart > RATE_LIMIT_WINDOW then
+		entry.count = 1
+		entry.windowStart = now
+		return true
+	end
+	entry.count += 1
+	if entry.count > RATE_LIMIT_MAX then
+		warn(string.format("[LaunchValidator] Rate limit hit for userId %d", userId))
+		return false
+	end
+	return true
+end
+
 function LaunchValidator.ValidateAndQueue(player, sequenceId, launchData)
-	print(string.format("[Server:Launch] Remote launch request received from %s (Seq: %d)", player.Name, sequenceId))
+	if not checkRateLimit(player.UserId) then return end
 
 	local matchState = TickManager._activeMatchState
 	if not matchState then
-		warn("[Server:Launch] No active match state, ignoring launch request.")
+		warn("[LaunchValidator] No active match state.")
 		return
 	end
-
 	if matchState.phase == "Finished" then
-		warn("[Server:Launch] Match already finished, ignoring launch request.")
 		return
 	end
 
-	-- Basic validation
-	local vector = launchData.launchVector or Vector3.new(0, 0, 0)
-	local power = launchData.spinPower or 50
+	local bState = matchState.beyStates[player.UserId]
+	if not bState then
+		warn("[LaunchValidator] No BeyState for player " .. player.Name)
+		return
+	end
 
-	-- Sanitize/Clamp
-	if vector.Magnitude > 200 then
-		vector = vector.Unit * 200
+	-- Single-fire guard: one launch per Bey per match
+	if bState.launchConsumed then
+		warn(string.format("[LaunchValidator] Duplicate launch rejected for %s (Seq: %d)", player.Name, sequenceId))
+		return
+	end
+
+	-- Sanitise inputs
+	local vector = launchData and launchData.launchVector or Vector3.new(0, 0, 0)
+	local power  = launchData and launchData.spinPower   or 50
+
+	if vector.Magnitude > Constants.VelocityClampMax then
+		vector = vector.Unit * Constants.VelocityClampMax
 	end
 	power = math.clamp(power, 0, 200)
 
-	-- Queue it for the next Input phase
+	-- Mark consumed before queuing to prevent race conditions
+	bState.launchConsumed = true
+
 	table.insert(matchState.inputQueue, {
 		inputSequenceId = sequenceId,
 		playerId = player.UserId,
@@ -39,7 +80,7 @@ function LaunchValidator.ValidateAndQueue(player, sequenceId, launchData)
 		},
 	})
 
-	print(string.format("[Server:Launch] Launch queued for player %s (UserId: %d)", player.Name, player.UserId))
+	print(string.format("[LaunchValidator] Launch queued for %s (Seq: %d)", player.Name, sequenceId))
 end
 
 return LaunchValidator

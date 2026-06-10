@@ -11,22 +11,30 @@ local TelemetryLogger = {}
 
 -- Per-match accumulators (reset on match start)
 local telemetry = {
-	collisionCounts = { Light = 0, Heavy = 0, Smash = 0 },
-	heavyTimestamps = {},
-	smashTimestamps = {},
-	recoveryEvents = 0,
-	tiltAccumulators = {}, -- { [pid] = { sum = 0, samples = 0 } }
-	matchStartTick = 0,
-	hasLoggedFinish = false,
+	collisionCounts  = { Light = 0, Heavy = 0, Smash = 0 },
+	heavyTimestamps  = {},
+	smashTimestamps  = {},
+	recoveryEvents   = 0,
+	ringOutWarnings  = 0,
+	ringOutEscapes   = 0,
+	ringOutFinishes  = 0,
+	commandCounts    = {}, -- { [pid] = { Attack=0, Defend=0, Evade=0 } }
+	tiltAccumulators = {}, -- { [pid] = { sum=0, samples=0 } }
+	matchStartTick   = 0,
+	hasLoggedFinish  = false,
 }
 
 local function resetTelemetry()
 	telemetry.collisionCounts = { Light = 0, Heavy = 0, Smash = 0 }
 	telemetry.heavyTimestamps = {}
 	telemetry.smashTimestamps = {}
-	telemetry.recoveryEvents = 0
+	telemetry.recoveryEvents  = 0
+	telemetry.ringOutWarnings = 0
+	telemetry.ringOutEscapes  = 0
+	telemetry.ringOutFinishes = 0
+	telemetry.commandCounts   = {}
 	telemetry.tiltAccumulators = {}
-	telemetry.matchStartTick = 0
+	telemetry.matchStartTick  = 0
 	telemetry.hasLoggedFinish = false
 end
 
@@ -35,9 +43,9 @@ local function generateEmotionalTag(matchState)
 
 	-- Close Finish: both/all beys below 25% stability at end
 	local lowStabilityCount = 0
-	local totalBeys = 0
-	for _, bState in pairs(matchState.beyStates) do
-		totalBeys += 1
+	local totalBeys = #matchState.playerOrder
+	for _, pid in ipairs(matchState.playerOrder) do
+		local bState = matchState.beyStates[pid]
 		if bState.stability < Constants.BaseStability * 0.25 then
 			lowStabilityCount += 1
 		end
@@ -86,7 +94,8 @@ function TelemetryLogger.OnReplicationPhase(matchState)
 	-- Accumulate per-tick data during active play
 	if matchState.phase == "Active" then
 		-- Tilt tracking
-		for pid, bState in pairs(matchState.beyStates) do
+		for _, pid in ipairs(matchState.playerOrder) do
+			local bState = matchState.beyStates[pid]
 			if not telemetry.tiltAccumulators[pid] then
 				telemetry.tiltAccumulators[pid] = { sum = 0, samples = 0 }
 			end
@@ -108,6 +117,23 @@ function TelemetryLogger.OnReplicationPhase(matchState)
 				end
 			elseif ev.eventType == "Recovery" then
 				telemetry.recoveryEvents += 1
+			elseif ev.eventType == "CommandIssued" then
+				local pid = ev.eventData.playerId
+				local cmd = ev.eventData.command
+				if not telemetry.commandCounts[pid] then
+					telemetry.commandCounts[pid] = { Attack = 0, Defend = 0, Evade = 0 }
+				end
+				if telemetry.commandCounts[pid][cmd] then
+					telemetry.commandCounts[pid][cmd] += 1
+				end
+			elseif ev.eventType == "RingOutWarning" then
+				telemetry.ringOutWarnings += 1
+			elseif ev.eventType == "RingOutEscaped" then
+				telemetry.ringOutEscapes += 1
+			elseif ev.eventType == "BeyFinished" then
+				if ev.eventData.reason == "RingOut" then
+					telemetry.ringOutFinishes += 1
+				end
 			end
 		end
 	end
@@ -131,11 +157,14 @@ function TelemetryLogger.OnReplicationPhase(matchState)
 			finishType = "Draw"
 		end
 
-		-- Average tilts
+		-- Average tilts (in playerOrder for deterministic print order)
 		local tiltSummary = {}
-		for pid, acc in pairs(telemetry.tiltAccumulators) do
-			local avg = (acc.samples > 0) and (acc.sum / acc.samples) or 0
-			table.insert(tiltSummary, string.format("  Player %d: %.1f°", pid, avg))
+		for _, pid in ipairs(matchState.playerOrder) do
+			local acc = telemetry.tiltAccumulators[pid]
+			if acc then
+				local avg = (acc.samples > 0) and (acc.sum / acc.samples) or 0
+				table.insert(tiltSummary, string.format("  Player %d: %.1f°", pid, avg))
+			end
 		end
 
 		-- Emotional tag
@@ -170,6 +199,22 @@ function TelemetryLogger.OnReplicationPhase(matchState)
 			print(line)
 		end
 		print(string.format(" Recoveries:   %d", telemetry.recoveryEvents))
+		print("───────────────────────────────────────────")
+		print(string.format(" Ring-Outs:    Warnings=%d  Escapes=%d  Finishes=%d",
+			telemetry.ringOutWarnings,
+			telemetry.ringOutEscapes,
+			telemetry.ringOutFinishes))
+		-- Command distribution
+		if next(telemetry.commandCounts) then
+			print(" Commands:")
+			for _, pid in ipairs(matchState.playerOrder) do
+				local cc = telemetry.commandCounts[pid]
+				if cc then
+					print(string.format("  Player %d:  Attack=%d  Defend=%d  Evade=%d",
+						pid, cc.Attack, cc.Defend, cc.Evade))
+				end
+			end
+		end
 		print("───────────────────────────────────────────")
 		print(string.format(" Emotional:    [%s]", emotionalTag))
 		print("═══════════════════════════════════════════")

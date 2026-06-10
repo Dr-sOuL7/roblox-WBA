@@ -1,0 +1,2064 @@
+<roblox version="4">
+  <Item class="ReplicatedStorage" referent="0">
+    <Properties>
+      <string name="Name">ReplicatedStorage</string>
+    </Properties>
+    <Item class="ModuleScript" referent="1">
+      <Properties>
+        <string name="Name">Constants</string>
+        <string name="Source"><![CDATA[local Constants = {
+	-- Tick rates decoupled
+	SimulationTickRate = 10, -- Hz
+	ReplicationTickRate = 10, -- Hz
+	MaxCatchupTicks = 5, -- Drift protection
+
+	-- Launch Bonus
+	LaunchBonusCap = 0.15, -- +/- 15% cap
+
+	-- Physics & Core Mechanics
+	BowlRadius = 12,   -- XZ radius of the playable arena; beys reflect off this boundary
+	BeyRadius = 2,
+	CollisionCooldownTicks = 2, -- Prevent spam but allow chained clashes (1-2 ticks)
+	TangentialEnergyRetention = 0.75, -- Prevent infinite orbits (tunable 0.65-0.85)
+
+	-- Physics Forces
+	FrictionDecay = 0.98, -- Per-tick velocity multiplier
+	BowlForce = 6, -- Gentle drift toward center
+	VelocityClampMax = 200, -- Hard cap in ClampPhase
+	PostCollisionVelocityClamp = 150, -- Immediate post-recoil cap
+	CollisionPushMultiplier = 0.8, -- impactSpeed * this = push force
+	CollisionPushMin = 10, -- Minimum push force
+
+	-- Angular & Wobble
+	AngularDecay = 0.99, -- Per-tick angular velocity multiplier
+	WobbleAmplification = 25, -- Tilt escalation rate when unstable
+	WobbleTiltRecoveryRate = 5, -- Tilt recovery per second during stable motion
+	WobbleCollapseThreshold = 80, -- Tilt degrees that trigger elimination
+
+	-- Spin & Stability
+	MinEffectiveSpinThreshold = 5, -- Finish limit instead of strict 0
+	CriticalSpinWindow = 0.35, -- Delay before elimination to create readable collapse
+	BaseStability = 100,
+	StabilityDamageLight = 2,
+	StabilityDamageHeavy = 10,
+	StabilityDamageSmash = 25,
+	SpinDamageMultiplierHeavy = 0.9, -- 10% spin loss on heavy
+	SpinDamageMultiplierSmash = 0.8, -- 20% spin loss on smash
+
+	-- Hitstop (visual microfreeze on collision, seconds)
+	HitstopHeavy = 0.04,
+	HitstopSmash = 0.08,
+	HitstopDurationRange = { Min = 0.03, Max = 0.06 }, -- Legacy range
+
+	-- Interpolation
+	InterpolationDelay = 0.1, -- 100ms render buffer
+	SnapshotBufferMax = 20,
+
+	-- Collision Severity Thresholds (impact speed)
+	SmashSpeedThreshold = 50,
+	HeavySpeedThreshold = 20,
+
+	-- Spin-down Audio
+	SpinDownAudioThreshold = 30, -- Angular velocity below this triggers spin-down sound
+}
+
+return Constants
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="Folder" referent="2">
+      <Properties>
+        <string name="Name">Debug</string>
+      </Properties>
+    </Item>
+    <Item class="Folder" referent="3">
+      <Properties>
+        <string name="Name">Gameplay</string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="4">
+      <Properties>
+        <string name="Name">MatchState</string>
+        <string name="Source"><![CDATA[--[=[
+    MatchState.lua
+    Schema and factory for authoritative MatchState.
+    IMPORTANT: This module contains NO LIVE STATE. It only defines structure and defaults.
+]=]
+
+local MatchState = {}
+
+function MatchState.new(matchSeed: number)
+    return {
+        matchId = "",
+        phase = "Countdown", -- Countdown, Active, Finished
+        tickNumber = 0,
+        serverTimestamp = workspace:GetServerTimeNow(),
+        matchSeed = matchSeed or os.time(), -- Deterministic RNG seed
+        
+        timers = {
+            matchStart = 0,
+            countdownEndTime = 0,
+            duration = 0,
+        },
+        activePlayers = {},
+        beyStates = {}, -- mapping of playerId -> BeyState
+        
+        -- Artificial Collision Cooldown Map: e.g. ["idA_idB"] = remainingTicks
+        collisionCooldowns = {}, 
+        
+        -- Event markers for this tick (flushed to ReplayRecorder at replication)
+        tickEvents = {}, 
+
+        telemetryRefs = {},
+        replayRefs = {},
+        currentWinner = nil,
+        finishFlags = {},
+        inputQueue = {}, -- Validated inputs: { inputSequenceId, playerId, data }
+    }
+end
+
+function MatchState.createBeyState(playerId: number)
+    return {
+        playerId = playerId,
+        position = Vector3.new(0, 5, 0),
+        previousPosition = Vector3.new(0, 5, 0),
+        velocity = Vector3.new(0, 0, 0),
+        angularVelocity = Vector3.new(0, 50, 0), -- Initial RPM proxy
+        tilt = 0,
+        stability = 100,
+        momentum = 0,
+        heat = 0,
+        criticalSpinTimer = 0,
+        collisionFlags = {},
+        zoneState = "Center",
+    }
+end
+
+function MatchState.validate(stateInstance)
+    assert(type(stateInstance.tickNumber) == "number", "Invalid tickNumber")
+    return true
+end
+
+return MatchState
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="Folder" referent="5">
+      <Properties>
+        <string name="Name">Networking</string>
+      </Properties>
+    </Item>
+    <Item class="Folder" referent="6">
+      <Properties>
+        <string name="Name">Packages</string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="7">
+      <Properties>
+        <string name="Name">Remotes</string>
+        <string name="Source"><![CDATA[--[=[
+	Remotes.lua
+	A centralized definitions module for RemoteEvents.
+	Server creates, Client waits — prevents RemoteEvent instance mismatch.
+]=]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local IS_SERVER = RunService:IsServer()
+local FOLDER_NAME = "BeyRemotes" -- Distinct name to avoid collision with this ModuleScript
+
+local function getRemotesFolder()
+	if IS_SERVER then
+		local folder = ReplicatedStorage:FindFirstChild(FOLDER_NAME)
+		if not folder then
+			folder = Instance.new("Folder")
+			folder.Name = FOLDER_NAME
+			folder.Parent = ReplicatedStorage
+		end
+		return folder
+	else
+		return ReplicatedStorage:WaitForChild(FOLDER_NAME, 10)
+	end
+end
+
+local function getOrCreateRemote(name: string): RemoteEvent
+	local folder = getRemotesFolder()
+	if not folder then
+		warn("[Remotes] Could not find remotes folder on client!")
+		return nil
+	end
+
+	if IS_SERVER then
+		local remote = folder:FindFirstChild(name)
+		if not remote then
+			remote = Instance.new("RemoteEvent")
+			remote.Name = name
+			remote.Parent = folder
+		end
+		return remote
+	else
+		return folder:WaitForChild(name, 10)
+	end
+end
+
+local Remotes = {
+	-- Client to Server
+	RequestLaunch = getOrCreateRemote("RequestLaunch"),
+
+	-- Server to Client
+	MatchStateChanged = getOrCreateRemote("MatchStateChanged"),
+	StateSnapshot = getOrCreateRemote("StateSnapshot"),
+	CollisionEvent = getOrCreateRemote("CollisionEvent"),
+	UpdateDebugOverlay = getOrCreateRemote("UpdateDebugOverlay"),
+}
+
+return Remotes
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="Folder" referent="8">
+      <Properties>
+        <string name="Name">ReplicatedShared</string>
+      </Properties>
+    </Item>
+    <Item class="Folder" referent="9">
+      <Properties>
+        <string name="Name">Runtime</string>
+      </Properties>
+    </Item>
+    <Item class="Folder" referent="10">
+      <Properties>
+        <string name="Name">Shared</string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="11">
+      <Properties>
+        <string name="Name">Types</string>
+        <string name="Source"><![CDATA[export type ReplaySnapshot = {
+    tickNumber: number,
+    serverTimestamp: number,
+    beyStates: { [number]: BeyState },
+    events: { [number]: ReplayEvent }, -- Event markers support
+}
+
+export type ReplayEvent = {
+    eventType: string, -- "Collision", "Launch", "Warning", "Finish"
+    eventData: any,
+}
+
+export type BeyState = {
+    playerId: number,
+    position: Vector3,
+    previousPosition: Vector3, -- Future-proof for swept overlaps
+    velocity: Vector3,
+    angularVelocity: Vector3,
+    tilt: number,
+    stability: number,
+    momentum: number,
+    heat: number,
+    criticalSpinTimer: number,
+    collisionFlags: { [string]: boolean },
+    zoneState: string,
+}
+
+export type CollisionEventPayload = {
+    tickNumber: number,
+    collisionId: string,
+    involvedBeys: { number }, -- Array of player IDs involved
+    collisionClass: string,
+    position: Vector3,
+}
+
+return {}
+]]></string>
+      </Properties>
+    </Item>
+  </Item>
+  <Item class="ServerScriptService" referent="12">
+    <Properties>
+      <string name="Name">ServerScriptService</string>
+    </Properties>
+    <Item class="ModuleScript" referent="13">
+      <Properties>
+        <string name="Name">BeyController</string>
+        <string name="Source"><![CDATA[--[=[
+    BeyController.lua
+    Responsible for mutating MatchState for Beys (Inputs, StateUpdates).
+]=]
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
+local TickManager = require(script.Parent:WaitForChild("TickManager"))
+
+local BeyController = {}
+
+function BeyController.OnInputPhase(matchState)
+    -- Process the validated inputQueue
+    for _, inputEvent in ipairs(matchState.inputQueue) do
+        local pid = inputEvent.playerId
+        local bState = matchState.beyStates[pid]
+        if bState then
+            -- Apply launch vector and angular velocity
+            bState.velocity = inputEvent.data.launchVector
+            bState.angularVelocity = Vector3.new(0, inputEvent.data.spinPower, 0)
+        end
+    end
+    -- Clear queue after processing
+    table.clear(matchState.inputQueue)
+end
+
+function BeyController.OnStateUpdatePhase(matchState)
+    local dt = 1 / Constants.SimulationTickRate
+
+    for pid, bState in pairs(matchState.beyStates) do
+        -- Save previous position for overlap checks/future sweeping
+        bState.previousPosition = bState.position
+        
+        -- Apply velocity to position
+        bState.position += bState.velocity * dt
+    end
+end
+
+TickManager.RegisterHandler("Input", BeyController.OnInputPhase)
+TickManager.RegisterHandler("StateUpdate", BeyController.OnStateUpdatePhase)
+
+return BeyController
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="14">
+      <Properties>
+        <string name="Name">CollisionClassifier</string>
+        <string name="Source"><![CDATA[--[=[
+    CollisionClassifier.lua
+    Responsible for categorizing collisions (Light, Heavy, Smash) for telemetry and VFX.
+    DOES NOT mutate gameplay state.
+]=]
+local TickManager = require(script.Parent:WaitForChild("TickManager"))
+
+local CollisionClassifier = {}
+
+-- Maintain a sequence counter per tick to ensure unique deterministic IDs
+local tickSequenceCounter = 0
+
+function CollisionClassifier.OnPhysicsPhaseStart(matchState)
+    tickSequenceCounter = 0
+end
+
+-- Called by PhysicsController after an overlap resolves
+function CollisionClassifier.Classify(matchState, beyA, beyB, severityClass, contactPosition)
+    tickSequenceCounter += 1
+    
+    local minId, maxId = math.min(beyA.playerId, beyB.playerId), math.max(beyA.playerId, beyB.playerId)
+    local collisionId = string.format("%d_%d_%d_%d", matchState.tickNumber, minId, maxId, tickSequenceCounter)
+    
+    -- Emit event to MatchState tickEvents for Replay/Replication
+    table.insert(matchState.tickEvents, {
+        eventType = "Collision",
+        eventData = {
+            collisionId = collisionId,
+            tickNumber = matchState.tickNumber,
+            involvedBeys = {beyA.playerId, beyB.playerId},
+            collisionClass = severityClass,
+            position = contactPosition
+        }
+    })
+end
+
+-- Reset the counter at the start of the physics phase
+TickManager.RegisterHandler("Physics", CollisionClassifier.OnPhysicsPhaseStart)
+
+return CollisionClassifier
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="15">
+      <Properties>
+        <string name="Name">DebugStatePublisher</string>
+        <string name="Source"><![CDATA[--[=[
+    DebugStatePublisher.lua
+    Publishes real-time state snapshots to clients.
+]=]
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
+local TickManager = require(script.Parent:WaitForChild("TickManager"))
+
+local DebugStatePublisher = {}
+
+function DebugStatePublisher.OnReplicationPhase(matchState)
+    local snapshot = {
+        tickNumber = matchState.tickNumber,
+        serverTimestamp = matchState.serverTimestamp,
+        beyStates = {},
+        events = {}
+    }
+    
+    for _, ev in ipairs(matchState.tickEvents) do
+        table.insert(snapshot.events, {
+            eventType = ev.eventType,
+            eventData = ev.eventData 
+        })
+    end
+    
+    for pid, bState in pairs(matchState.beyStates) do
+        snapshot.beyStates[pid] = {
+            position = bState.position,
+            velocity = bState.velocity,
+            angularVelocity = bState.angularVelocity,
+            tilt = bState.tilt,
+            stability = bState.stability,
+            zoneState = bState.zoneState,
+        }
+    end
+    
+    Remotes.StateSnapshot:FireAllClients(snapshot)
+end
+
+TickManager.RegisterHandler("Replication", DebugStatePublisher.OnReplicationPhase)
+
+return DebugStatePublisher
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="16">
+      <Properties>
+        <string name="Name">LaunchValidator</string>
+        <string name="Source"><![CDATA[-- src/ServerScriptService/LaunchValidator.lua
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
+local TickManager = require(script.Parent:WaitForChild("TickManager"))
+
+local LaunchValidator = {}
+
+function LaunchValidator.ValidateAndQueue(player, sequenceId, launchData)
+	print(string.format("[Server:Launch] Remote launch request received from %s (Seq: %d)", player.Name, sequenceId))
+
+	local matchState = TickManager._activeMatchState
+	if not matchState then
+		warn("[Server:Launch] No active match state, ignoring launch request.")
+		return
+	end
+
+	if matchState.phase == "Finished" then
+		warn("[Server:Launch] Match already finished, ignoring launch request.")
+		return
+	end
+
+	-- Basic validation
+	local vector = launchData.launchVector or Vector3.new(0, 0, 0)
+	local power = launchData.spinPower or 50
+
+	-- Sanitize/Clamp
+	if vector.Magnitude > 200 then
+		vector = vector.Unit * 200
+	end
+	power = math.clamp(power, 0, 200)
+
+	-- Queue it for the next Input phase
+	table.insert(matchState.inputQueue, {
+		inputSequenceId = sequenceId,
+		playerId = player.UserId,
+		data = {
+			launchVector = vector,
+			spinPower = power,
+		},
+	})
+
+	print(string.format("[Server:Launch] Launch queued for player %s (UserId: %d)", player.Name, player.UserId))
+end
+
+return LaunchValidator
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="Script" referent="17">
+      <Properties>
+        <string name="Name">Main</string>
+        <token name="RunContext">0</token>
+        <string name="Source"><![CDATA[-- src/ServerScriptService/Main.server.lua
+local Players = game:GetService("Players")
+
+local MatchManager = require(script.Parent:WaitForChild("MatchManager"))
+local TickManager = require(script.Parent:WaitForChild("TickManager"))
+
+-- Require all controllers to register their TickManager phases
+require(script.Parent:WaitForChild("BeyController"))
+require(script.Parent:WaitForChild("PhysicsController"))
+require(script.Parent:WaitForChild("CollisionClassifier"))
+require(script.Parent:WaitForChild("SpinEvaluator"))
+require(script.Parent:WaitForChild("ReplayRecorder"))
+require(script.Parent:WaitForChild("TelemetryLogger"))
+require(script.Parent:WaitForChild("DebugStatePublisher"))
+
+local Remotes = require(game:GetService("ReplicatedStorage"):WaitForChild("Remotes"))
+local LaunchValidator = require(script.Parent:WaitForChild("LaunchValidator"))
+
+local waitingPlayers = {}
+
+Players.PlayerAdded:Connect(function(player)
+    print("Server: Player joined: " .. player.Name)
+    table.insert(waitingPlayers, player.UserId)
+    
+    -- For Prototype 1 testing, we start immediately when 1 or 2 players join
+    if #waitingPlayers == 1 then
+        print("Server: 1 Player joined. Starting solo test match in 2 seconds...")
+        task.wait(2)
+        MatchManager.StartNewMatch({waitingPlayers[1]})
+    elseif #waitingPlayers == 2 then
+        print("Server: 2 Players joined. Starting multiplayer match in 2 seconds...")
+        task.wait(2)
+        MatchManager.StartNewMatch({waitingPlayers[1], waitingPlayers[2]})
+    end
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    local idx = table.find(waitingPlayers, player.UserId)
+    if idx then
+        table.remove(waitingPlayers, idx)
+    end
+end)
+
+-- Handle launch requests from clients
+Remotes.RequestLaunch.OnServerEvent:Connect(function(player, sequenceId, launchData)
+    LaunchValidator.ValidateAndQueue(player, sequenceId, launchData)
+end)
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="18">
+      <Properties>
+        <string name="Name">MatchManager</string>
+        <string name="Source"><![CDATA[--[=[
+	MatchManager.lua
+	Orchestrates match initialization and cleanup.
+	Does NOT terminate the Tick loop directly.
+]=]
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local MatchState = require(ReplicatedStorage:WaitForChild("MatchState"))
+local TickManager = require(script.Parent:WaitForChild("TickManager"))
+
+local MatchManager = {}
+
+local stadiumSpawned = false
+local currentPlayers = {}
+
+-- Create a highly visible multi-part Prototype Bey model
+local function createPrototypeBeyModel(playerId: number, isPlayer1: boolean)
+	local modelName = "Bey_" .. tostring(playerId)
+	local model = workspace:FindFirstChild(modelName)
+	if model then return model end
+
+	model = Instance.new("Model")
+	model.Name = modelName
+
+	-- 1. Primary Part (Pivot at the very bottom tip, offset to rest on the 0.4 thick floor)
+	local pivot = Instance.new("Part")
+	pivot.Name = "Pivot"
+	pivot.Size = Vector3.new(0.1, 0.1, 0.1)
+	pivot.Transparency = 1
+	pivot.Anchored = true
+	pivot.CanCollide = false
+	pivot.CFrame = CFrame.new(0, 0.2, 0)
+	pivot.Parent = model
+	model.PrimaryPart = pivot
+
+	local beyColor = isPlayer1 and Color3.fromRGB(255, 50, 50) or Color3.fromRGB(50, 120, 255)
+
+	-- 2. Driver (Tip)
+	local driver = Instance.new("Part")
+	driver.Name = "Driver"
+	driver.Size = Vector3.new(1.5, 1.5, 1.5)
+	driver.Shape = Enum.PartType.Cylinder
+	driver.CFrame = pivot.CFrame * CFrame.new(0, 0.75, 0) * CFrame.Angles(0, 0, math.rad(90))
+	driver.Color = Color3.fromRGB(40, 40, 40)
+	driver.Anchored = true
+	driver.CanCollide = false
+	driver.Parent = model
+
+	-- 3. Weight Disc
+	local disc = Instance.new("Part")
+	disc.Name = "WeightDisc"
+	disc.Size = Vector3.new(0.8, 3.5, 3.5)
+	disc.Shape = Enum.PartType.Cylinder
+	disc.CFrame = pivot.CFrame * CFrame.new(0, 1.9, 0) * CFrame.Angles(0, 0, math.rad(90))
+	disc.Color = Color3.fromRGB(150, 160, 170)
+	disc.Material = Enum.Material.Metal
+	disc.Anchored = true
+	disc.CanCollide = false
+	disc.Parent = model
+
+	-- 4. Attack Ring
+	local ring = Instance.new("Part")
+	ring.Name = "AttackRing"
+	ring.Size = Vector3.new(1.2, 5.0, 5.0)
+	ring.Shape = Enum.PartType.Cylinder
+	ring.CFrame = pivot.CFrame * CFrame.new(0, 2.9, 0) * CFrame.Angles(0, 0, math.rad(90))
+	ring.Color = beyColor
+	ring.Material = Enum.Material.SmoothPlastic
+	ring.Anchored = true
+	ring.CanCollide = false
+	ring.Parent = model
+
+	-- 5. Blades/Notches (4 protruding blocks to make spin hyper-visible)
+	for i = 1, 4 do
+		local blade = Instance.new("Part")
+		blade.Name = "Blade_" .. i
+		blade.Size = Vector3.new(1.2, 2.0, 2.5)
+		blade.Color = Color3.fromRGB(255, 255, 0) -- Bright Yellow
+		blade.Anchored = true
+		blade.CanCollide = false
+		blade.CFrame = pivot.CFrame 
+			* CFrame.new(0, 2.9, 0)
+			* CFrame.Angles(0, math.rad(i * 90), 0)
+			* CFrame.new(0, 0, -2.8)
+		blade.Parent = model
+	end
+
+	-- Center graphic / Bit Beast placeholder
+	local bit = Instance.new("Part")
+	bit.Name = "BitChip"
+	bit.Size = Vector3.new(0.2, 2.0, 2.0)
+	bit.Shape = Enum.PartType.Cylinder
+	bit.CFrame = pivot.CFrame * CFrame.new(0, 3.6, 0) * CFrame.Angles(0, 0, math.rad(90))
+	bit.Color = Color3.fromRGB(255, 255, 255)
+	bit.Material = Enum.Material.Neon
+	bit.Anchored = true
+	bit.CanCollide = false
+	bit.Parent = model
+
+	model.Parent = workspace
+	print(string.format("[Match] Prototype Bey spawned for player %d (Player 1: %s)", playerId, tostring(isPlayer1)))
+	return model
+end
+
+local function spawnStadium()
+	if stadiumSpawned then return end
+	stadiumSpawned = true
+
+	local FLOOR_RADIUS    = 12   -- flat arena floor radius (studs)
+	local WALL_IN_RADIUS  = 12   -- where the slope begins
+	local WALL_OUT_RADIUS = 18   -- where the slope ends at the rim
+	local WALL_HEIGHT     = 4    -- vertical rise of the slope
+	local SEGMENTS        = 20   -- number of slope panels (more = smoother bowl)
+	local FLOOR_Y         = 0    -- world Y of the arena surface
+
+	-- ── Arena floor disk ─────────────────────────────────────────────
+	local floor = Instance.new("Part")
+	floor.Name = "StadiumFloor"
+	floor.Size = Vector3.new(0.4, FLOOR_RADIUS * 2, FLOOR_RADIUS * 2)
+	floor.CFrame = CFrame.new(0, FLOOR_Y, 0) * CFrame.Angles(0, 0, math.rad(90))
+	floor.Shape = Enum.PartType.Cylinder
+	floor.Anchored = true
+	floor.CanCollide = true
+	floor.Material = Enum.Material.SmoothPlastic
+	floor.Color = Color3.fromRGB(245, 245, 250)
+	floor.Parent = workspace
+
+	-- ── Center nub (classic Beyblade stadium center marker) ──────────
+	local centerMark = Instance.new("Part")
+	centerMark.Name = "StadiumCenter"
+	centerMark.Size = Vector3.new(0.5, 3, 3)
+	centerMark.CFrame = CFrame.new(0, FLOOR_Y + 0.05, 0) * CFrame.Angles(0, 0, math.rad(90))
+	centerMark.Shape = Enum.PartType.Cylinder
+	centerMark.Anchored = true
+	centerMark.CanCollide = false
+	centerMark.Material = Enum.Material.Neon
+	centerMark.Color = Color3.fromRGB(255, 55, 35)
+	centerMark.Parent = workspace
+
+	-- ── Sloped bowl wall (20 angled panels arranged in a ring) ───────
+	local WALL_DEPTH    = WALL_OUT_RADIUS - WALL_IN_RADIUS
+	local slopeLength   = math.sqrt(WALL_DEPTH ^ 2 + WALL_HEIGHT ^ 2)
+	local slopeTilt     = math.atan2(WALL_HEIGHT, WALL_DEPTH) -- angle from horizontal
+	local wallMidRadius = (WALL_IN_RADIUS + WALL_OUT_RADIUS) / 2
+
+	for i = 0, SEGMENTS - 1 do
+		local angle    = (i / SEGMENTS) * math.pi * 2
+		local arcWidth = (2 * math.pi * wallMidRadius / SEGMENTS) * 1.04 -- slight overlap
+
+		local seg = Instance.new("Part")
+		seg.Name = "StadiumWall"
+		-- X = slope length, Y = panel thickness, Z = arc width around the bowl
+		seg.Size = Vector3.new(slopeLength, 0.35, arcWidth)
+		seg.Anchored = true
+		seg.CanCollide = true
+		seg.Material = Enum.Material.SmoothPlastic
+		seg.Color = Color3.fromRGB(210, 215, 225)
+
+		-- Step 1: place at bowl mid-height at center
+		-- Step 2: spin around Y to face outward at this angle
+		-- Step 3: move outward by wallMidRadius in local +X (now radially outward)
+		-- Step 4: tilt so Size.X (length) runs up the slope
+		seg.CFrame = CFrame.new(0, FLOOR_Y + WALL_HEIGHT / 2, 0)
+			* CFrame.Angles(0, -angle, 0)
+			* CFrame.new(wallMidRadius, 0, 0)
+			* CFrame.Angles(0, 0, slopeTilt)
+
+		seg.Parent = workspace
+	end
+
+	-- ── Outer rim removed to prevent blocking the view ───────
+end
+
+function MatchManager.StartNewMatch(playerIds)
+	currentPlayers = playerIds
+	local matchSeed = os.time()
+	local newState = MatchState.new(matchSeed)
+	newState.matchId = "Match_" .. tostring(matchSeed)
+
+	-- Begin with an authoritative countdown
+	newState.phase = "Countdown"
+	newState.timers.countdownEndTime = workspace:GetServerTimeNow() + 3 -- 3 second countdown
+
+	print(string.format("[Match] Starting new match: %s | Seed: %d | Players: %d", newState.matchId, matchSeed, #playerIds))
+	print("[Match] Phase: Countdown (3 second countdown)")
+
+	-- Register state with TickManager immediately so RNG is available
+	TickManager.SetMatchState(newState)
+
+	-- Spawn Beys
+	spawnStadium()
+
+	for i, pid in ipairs(playerIds) do
+		local bState = MatchState.createBeyState(pid)
+		-- Launch the Beys! Offset them and shoot them tangentially
+		bState.position = Vector3.new((i == 1) and -10 or 10, 2, 0)
+		bState.velocity = Vector3.new(0, 0, (i == 1) and 60 or -60)
+		bState.previousPosition = bState.position
+		newState.beyStates[pid] = bState
+
+		createPrototypeBeyModel(pid, i == 1)
+	end
+
+	TickManager.Start()
+
+	-- Broadcast match start (Countdown phase)
+	local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
+	Remotes.MatchStateChanged:FireAllClients(newState.phase, {
+		matchId = newState.matchId,
+		seed = newState.matchSeed,
+		players = playerIds,
+		countdownEndTime = newState.timers.countdownEndTime,
+	})
+end
+
+function MatchManager.CleanupMatch()
+	TickManager.Stop()
+	stadiumSpawned = false
+	for _, part in ipairs(workspace:GetChildren()) do
+		local n = part.Name
+		if string.sub(n, 1, 4) == "Bey_"
+			or n == "StadiumFloor" or n == "StadiumWall"
+			or n == "StadiumCenter" then
+			part:Destroy()
+		end
+	end
+	print("[Match] Match cleaned up.")
+end
+
+TickManager.SetMatchFinishedCallback(function(state)
+	print("[Match] Match finished callback triggered. Restarting in 5 seconds...")
+	task.wait(5)
+	
+	local Players = game:GetService("Players")
+	local validPlayers = {}
+	for _, pid in ipairs(currentPlayers) do
+		if Players:GetPlayerByUserId(pid) then
+			table.insert(validPlayers, pid)
+		end
+	end
+	
+	MatchManager.CleanupMatch()
+	
+	if #validPlayers > 0 then
+		MatchManager.StartNewMatch(validPlayers)
+	else
+		print("[Match] Not enough players to restart match.")
+	end
+end)
+
+return MatchManager
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="19">
+      <Properties>
+        <string name="Name">PhysicsController</string>
+        <string name="Source"><![CDATA[--[=[
+	PhysicsController.lua
+	Responsible for Physics and Collision Resolution.
+	Owns stability mutation, recoil, and impulse.
+]=]
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
+local TickManager = require(script.Parent:WaitForChild("TickManager"))
+local CollisionClassifier = require(script.Parent:WaitForChild("CollisionClassifier"))
+
+local PhysicsController = {}
+
+function PhysicsController.OnPhysicsPhase(matchState)
+	local dt = 1 / Constants.SimulationTickRate
+
+	for pid, bState in pairs(matchState.beyStates) do
+		if bState.zoneState == "Finished" then continue end
+
+		-- Friction degrades velocity slightly
+		bState.velocity *= Constants.FrictionDecay
+
+		-- Gentle bowl drift toward center
+		local toCenter = (Vector3.new(0, 0, 0) - bState.position).Unit
+		if toCenter == toCenter then -- NaN guard
+			bState.velocity += toCenter * Constants.BowlForce * dt
+		end
+	end
+end
+
+function PhysicsController.OnCollisionPhase(matchState)
+	local beys = {}
+	for pid, state in pairs(matchState.beyStates) do
+		if state.zoneState ~= "Finished" then
+			table.insert(beys, state)
+		end
+	end
+
+	local threshold = Constants.BeyRadius * 2
+
+	for i = 1, #beys do
+		for j = i + 1, #beys do
+			local bA = beys[i]
+			local bB = beys[j]
+
+			local minId, maxId = math.min(bA.playerId, bB.playerId), math.max(bA.playerId, bB.playerId)
+			local cooldownKey = minId .. "_" .. maxId
+
+			if matchState.collisionCooldowns[cooldownKey] then continue end
+
+			local diff = bA.position - bB.position
+			local dist = diff.Magnitude
+
+			if dist <= threshold then
+				local normal = diff.Unit
+				-- Safely handle floating-point perfect overlaps
+				if dist < 0.001 then normal = Vector3.new(1, 0, 0) end
+
+				local relVel = bA.velocity - bB.velocity
+				local impactSpeed = relVel.Magnitude
+
+				-- Determine severity and damage multipliers
+				local severity = "Light"
+				local stabilityDmg = Constants.StabilityDamageLight
+				local spinDmgMultiplier = 1.0
+
+				if impactSpeed > Constants.SmashSpeedThreshold then
+					severity = "Smash"
+					stabilityDmg = Constants.StabilityDamageSmash
+					spinDmgMultiplier = Constants.SpinDamageMultiplierSmash
+				elseif impactSpeed > Constants.HeavySpeedThreshold then
+					severity = "Heavy"
+					stabilityDmg = Constants.StabilityDamageHeavy
+					spinDmgMultiplier = Constants.SpinDamageMultiplierHeavy
+				end
+
+				-- Tangential recoil with momentum redistribution (Orbit feel)
+				local pushForce = math.max(Constants.CollisionPushMin, impactSpeed * Constants.CollisionPushMultiplier)
+				local ret = Constants.TangentialEnergyRetention
+
+				bA.velocity = (normal * pushForce) + (bA.velocity - bA.velocity:Dot(normal) * normal) * ret
+				bB.velocity = (-normal * pushForce) + (bB.velocity - bB.velocity:Dot(-normal) * -normal) * ret
+
+				-- Immediate post-collision velocity clamp to prevent explosive energy spirals
+				local postClamp = Constants.PostCollisionVelocityClamp
+				if bA.velocity.Magnitude > postClamp then bA.velocity = bA.velocity.Unit * postClamp end
+				if bB.velocity.Magnitude > postClamp then bB.velocity = bB.velocity.Unit * postClamp end
+
+				-- Mutate Stability and Angular Velocity (Spin Bleed)
+				bA.stability = math.max(0, bA.stability - stabilityDmg)
+				bB.stability = math.max(0, bB.stability - stabilityDmg)
+				bA.angularVelocity *= spinDmgMultiplier
+				bB.angularVelocity *= spinDmgMultiplier
+
+				-- Apply cooldown map
+				matchState.collisionCooldowns[cooldownKey] = Constants.CollisionCooldownTicks
+
+				CollisionClassifier.Classify(matchState, bA, bB, severity, bA.position - (normal * Constants.BeyRadius))
+			end
+		end
+	end
+end
+
+function PhysicsController.OnClampPhase(matchState)
+	local clampMax = Constants.VelocityClampMax
+	local dt = 1 / Constants.SimulationTickRate
+
+	for pid, bState in pairs(matchState.beyStates) do
+		if bState.velocity.Magnitude > clampMax then
+			bState.velocity = bState.velocity.Unit * clampMax
+		end
+		-- NaN protection
+		if bState.velocity ~= bState.velocity then
+			warn("[PhysicsController] NaN velocity detected for player " .. tostring(pid) .. ", zeroing.")
+			bState.velocity = Vector3.new(0, 0, 0)
+		end
+		if bState.position ~= bState.position then
+			warn("[PhysicsController] NaN position detected for player " .. tostring(pid) .. ", resetting.")
+			bState.position = Vector3.new(0, 2, 0)
+		end
+		
+		local xzPos = Vector3.new(bState.position.X, 0, bState.position.Z)
+		local xzDist = xzPos.Magnitude
+		
+		-- Calculate physical 3D stadium floor height based on MatchManager geometry
+		-- Flat till 12, sloped 4 units up till 18
+		local floorY = 0
+		if xzDist > 12 then
+			if xzDist < 18 then
+				floorY = ((xzDist - 12) / 6) * 4
+			else
+				floorY = 4
+			end
+		end
+
+		-- Gravity
+		bState.velocity -= Vector3.new(0, 50 * dt, 0)
+
+		-- Floor clamp
+		if bState.position.Y <= floorY then
+			bState.position = Vector3.new(bState.position.X, floorY, bState.position.Z)
+			if bState.velocity.Y < 0 then
+				bState.velocity = Vector3.new(bState.velocity.X, 0, bState.velocity.Z)
+			end
+			
+			-- Gravity sliding down the slope
+			if xzDist > 12 and xzDist < 18 then
+				local slideDir = -xzPos.Unit
+				-- 30 is tunable slope gravity pull
+				bState.velocity += slideDir * (30 * dt)
+			end
+		end
+
+		-- Bowl outer rim boundary (prevents flying out)
+		local rimLimit = 18 - (Constants.BeyRadius * 0.8)
+		if xzDist > rimLimit then
+			local outDir = xzPos.Unit
+			local outSpeed = bState.velocity:Dot(outDir)
+			if outSpeed > 0 then
+				-- Reflect
+				bState.velocity = bState.velocity - outDir * (outSpeed * 1.5)
+			end
+			-- Push position back inside the boundary
+			local clamped = outDir * (rimLimit - 0.05)
+			bState.position = Vector3.new(clamped.X, bState.position.Y, clamped.Z)
+		end
+	end
+end
+
+TickManager.RegisterHandler("Physics", PhysicsController.OnPhysicsPhase)
+TickManager.RegisterHandler("Collision", PhysicsController.OnCollisionPhase)
+TickManager.RegisterHandler("Clamp", PhysicsController.OnClampPhase)
+
+return PhysicsController
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="20">
+      <Properties>
+        <string name="Name">ReplayRecorder</string>
+        <string name="Source"><![CDATA[--[=[
+    ReplayRecorder.lua
+    Handles state snapshot logging.
+    Stores only primitive data (NO Roblox Instances).
+    
+    NOTE: Currently storing Vector3 directly for Prototype 1 convenience.
+    Future optimization: Serialize to {x,y,z} for true cross-session replay exportability.
+]=]
+local TickManager = require(script.Parent:WaitForChild("TickManager"))
+
+local ReplayRecorder = {}
+ReplayRecorder.BUFFER_SIZE = 1200 -- 120 seconds at 10 Hz
+local _buffer = {}
+
+function ReplayRecorder.OnReplicationPhase(matchState)
+    -- Serialize state into primitives
+    local snapshot = {
+        tickNumber = matchState.tickNumber,
+        serverTimestamp = matchState.serverTimestamp,
+        events = {},
+        beyStates = {}
+    }
+    
+    for _, ev in ipairs(matchState.tickEvents) do
+        table.insert(snapshot.events, {
+            eventType = ev.eventType,
+            eventData = ev.eventData 
+        })
+    end
+    
+    for pid, state in pairs(matchState.beyStates) do
+        snapshot.beyStates[pid] = {
+            position = state.position,
+            velocity = state.velocity,
+            angularVelocity = state.angularVelocity,
+            tilt = state.tilt,
+            stability = state.stability,
+            zoneState = state.zoneState,
+        }
+    end
+    
+    table.insert(_buffer, snapshot)
+    
+    if #_buffer > ReplayRecorder.BUFFER_SIZE then
+        table.remove(_buffer, 1)
+    end
+end
+
+TickManager.RegisterHandler("Replication", ReplayRecorder.OnReplicationPhase)
+
+return ReplayRecorder
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="21">
+      <Properties>
+        <string name="Name">SpinEvaluator</string>
+        <string name="Source"><![CDATA[--[=[
+	SpinEvaluator.lua
+	Evaluates effective spin, detects finish conditions and wobble collapse.
+]=]
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
+local TickManager = require(script.Parent:WaitForChild("TickManager"))
+
+local SpinEvaluator = {}
+
+function SpinEvaluator.OnEvaluationPhase(matchState)
+	local dt = 1 / Constants.SimulationTickRate
+	local activeCount = 0
+	local lastActiveBey = nil
+
+	for pid, bState in pairs(matchState.beyStates) do
+		if bState.zoneState == "Finished" then continue end
+
+		-- Natural spin decay
+		bState.angularVelocity *= Constants.AngularDecay
+		local rpm = bState.angularVelocity.Magnitude
+
+		local stabilityRatio = bState.stability / Constants.BaseStability
+		if stabilityRatio < 0.3 then
+			-- Non-linear wobble escalation (Death spiral)
+			bState.tilt = bState.tilt + math.pow(1 - stabilityRatio, 2) * Constants.WobbleAmplification * dt
+		else
+			-- Slight tilt recovery damping during stable motion
+			if bState.tilt > 0 then
+				bState.tilt = math.max(0, bState.tilt - Constants.WobbleTiltRecoveryRate * dt)
+			end
+		end
+
+		-- Check thresholds
+		if rpm < Constants.MinEffectiveSpinThreshold or bState.tilt > Constants.WobbleCollapseThreshold then
+			bState.criticalSpinTimer += dt
+			if bState.criticalSpinTimer >= Constants.CriticalSpinWindow then
+				bState.zoneState = "Finished"
+				bState.angularVelocity = Vector3.new(0, 0, 0)
+				bState.velocity = Vector3.new(0, 0, 0)
+
+				local reason = (rpm < Constants.MinEffectiveSpinThreshold) and "SpinOut" or "WobbleCollapse"
+				print(string.format("[SpinEvaluator] Bey %d finished: %s (RPM: %.1f, Tilt: %.1f)", pid, reason, rpm, bState.tilt))
+
+				table.insert(matchState.tickEvents, {
+					eventType = "BeyFinished",
+					eventData = { playerId = pid, reason = reason },
+				})
+			end
+		else
+			-- Recovery event: was in critical, now recovered
+			if bState.criticalSpinTimer > 0 then
+				table.insert(matchState.tickEvents, {
+					eventType = "Recovery",
+					eventData = { playerId = pid, recoveredFromTimer = bState.criticalSpinTimer },
+				})
+			end
+			bState.criticalSpinTimer = 0
+		end
+
+		if bState.zoneState ~= "Finished" then
+			activeCount += 1
+			lastActiveBey = pid
+		end
+	end
+
+	-- Determine match end condition (works for solo and multiplayer)
+	local totalPlayers = 0
+	for _ in pairs(matchState.beyStates) do
+		totalPlayers += 1
+	end
+
+	if activeCount == 0 then
+		-- All beys finished simultaneously (draw), or solo bey spun out
+		matchState.finishFlags.matchEnded = true
+		matchState.currentWinner = (totalPlayers == 1) and lastActiveBey or "Draw"
+	elseif totalPlayers > 1 and activeCount == 1 then
+		-- Last bey standing in a multiplayer match
+		matchState.finishFlags.matchEnded = true
+		matchState.currentWinner = lastActiveBey
+	end
+end
+
+TickManager.RegisterHandler("Evaluation", SpinEvaluator.OnEvaluationPhase)
+
+return SpinEvaluator
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="22">
+      <Properties>
+        <string name="Name">TelemetryLogger</string>
+        <string name="Source"><![CDATA[--[=[
+	TelemetryLogger.lua
+	Collects per-match metrics and prints structured match summaries.
+	Tracks collision counts, timestamps, stability, recovery events, and emotional tags.
+]=]
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
+local TickManager = require(script.Parent:WaitForChild("TickManager"))
+
+local TelemetryLogger = {}
+
+-- Per-match accumulators (reset on match start)
+local telemetry = {
+	collisionCounts = { Light = 0, Heavy = 0, Smash = 0 },
+	heavyTimestamps = {},
+	smashTimestamps = {},
+	recoveryEvents = 0,
+	tiltAccumulators = {}, -- { [pid] = { sum = 0, samples = 0 } }
+	matchStartTick = 0,
+	hasLoggedFinish = false,
+}
+
+local function resetTelemetry()
+	telemetry.collisionCounts = { Light = 0, Heavy = 0, Smash = 0 }
+	telemetry.heavyTimestamps = {}
+	telemetry.smashTimestamps = {}
+	telemetry.recoveryEvents = 0
+	telemetry.tiltAccumulators = {}
+	telemetry.matchStartTick = 0
+	telemetry.hasLoggedFinish = false
+end
+
+local function generateEmotionalTag(matchState)
+	local tags = {}
+
+	-- Close Finish: both/all beys below 25% stability at end
+	local lowStabilityCount = 0
+	local totalBeys = 0
+	for _, bState in pairs(matchState.beyStates) do
+		totalBeys += 1
+		if bState.stability < Constants.BaseStability * 0.25 then
+			lowStabilityCount += 1
+		end
+	end
+	if lowStabilityCount >= totalBeys and totalBeys > 1 then
+		table.insert(tags, "CloseFinish")
+	end
+
+	-- Dominant: winner has >60% stability remaining
+	if matchState.currentWinner and matchState.currentWinner ~= "Draw" then
+		local winnerState = matchState.beyStates[matchState.currentWinner]
+		if winnerState and winnerState.stability > Constants.BaseStability * 0.6 then
+			table.insert(tags, "Dominant")
+		end
+	end
+
+	-- Slugfest: high collision count
+	local totalCollisions = telemetry.collisionCounts.Light + telemetry.collisionCounts.Heavy + telemetry.collisionCounts.Smash
+	if totalCollisions > 20 then
+		table.insert(tags, "Slugfest")
+	end
+
+	-- Comeback: at least one recovery event
+	if telemetry.recoveryEvents > 0 then
+		table.insert(tags, "Comeback")
+	end
+
+	-- Draw
+	if matchState.currentWinner == "Draw" then
+		table.insert(tags, "Draw")
+	end
+
+	if #tags == 0 then
+		table.insert(tags, "Standard")
+	end
+
+	return table.concat(tags, ", ")
+end
+
+function TelemetryLogger.OnReplicationPhase(matchState)
+	-- Track start tick
+	if telemetry.matchStartTick == 0 and matchState.phase == "Active" then
+		telemetry.matchStartTick = matchState.tickNumber
+	end
+
+	-- Accumulate per-tick data during active play
+	if matchState.phase == "Active" then
+		-- Tilt tracking
+		for pid, bState in pairs(matchState.beyStates) do
+			if not telemetry.tiltAccumulators[pid] then
+				telemetry.tiltAccumulators[pid] = { sum = 0, samples = 0 }
+			end
+			telemetry.tiltAccumulators[pid].sum += bState.tilt
+			telemetry.tiltAccumulators[pid].samples += 1
+		end
+
+		-- Event tracking
+		for _, ev in ipairs(matchState.tickEvents) do
+			if ev.eventType == "Collision" then
+				local class = ev.eventData.collisionClass
+				if telemetry.collisionCounts[class] then
+					telemetry.collisionCounts[class] += 1
+				end
+				if class == "Heavy" then
+					table.insert(telemetry.heavyTimestamps, matchState.serverTimestamp)
+				elseif class == "Smash" then
+					table.insert(telemetry.smashTimestamps, matchState.serverTimestamp)
+				end
+			elseif ev.eventType == "Recovery" then
+				telemetry.recoveryEvents += 1
+			end
+		end
+	end
+
+	-- Print structured summary at match end
+	if matchState.phase == "Finished" and not telemetry.hasLoggedFinish then
+		telemetry.hasLoggedFinish = true
+
+		local tickDuration = 1 / Constants.SimulationTickRate
+		local matchTicks = matchState.tickNumber - telemetry.matchStartTick
+		local matchDuration = matchTicks * tickDuration
+
+		-- Determine finish type
+		local finishType = "Unknown"
+		for _, ev in ipairs(matchState.tickEvents) do
+			if ev.eventType == "BeyFinished" then
+				finishType = ev.eventData.reason or "Unknown"
+			end
+		end
+		if matchState.currentWinner == "Draw" then
+			finishType = "Draw"
+		end
+
+		-- Average tilts
+		local tiltSummary = {}
+		for pid, acc in pairs(telemetry.tiltAccumulators) do
+			local avg = (acc.samples > 0) and (acc.sum / acc.samples) or 0
+			table.insert(tiltSummary, string.format("  Player %d: %.1f°", pid, avg))
+		end
+
+		-- Emotional tag
+		local emotionalTag = generateEmotionalTag(matchState)
+
+		-- Print structured report
+		print("═══════════════════════════════════════════")
+		print("        MATCH TELEMETRY SUMMARY")
+		print("═══════════════════════════════════════════")
+		print(string.format(" Match ID:     %s", matchState.matchId))
+		print(string.format(" Winner:       %s", tostring(matchState.currentWinner)))
+		print(string.format(" Finish Type:  %s", finishType))
+		print(string.format(" Duration:     %.1fs (%d ticks)", matchDuration, matchTicks))
+		print("───────────────────────────────────────────")
+		print(string.format(" Collisions:   Light=%d  Heavy=%d  Smash=%d",
+			telemetry.collisionCounts.Light,
+			telemetry.collisionCounts.Heavy,
+			telemetry.collisionCounts.Smash))
+		if #telemetry.heavyTimestamps > 0 then
+			local ts = {}
+			for _, t in ipairs(telemetry.heavyTimestamps) do table.insert(ts, string.format("%.1f", t)) end
+			print(" Heavy @:      " .. table.concat(ts, ", "))
+		end
+		if #telemetry.smashTimestamps > 0 then
+			local ts = {}
+			for _, t in ipairs(telemetry.smashTimestamps) do table.insert(ts, string.format("%.1f", t)) end
+			print(" Smash @:      " .. table.concat(ts, ", "))
+		end
+		print("───────────────────────────────────────────")
+		print(" Avg Tilt:")
+		for _, line in ipairs(tiltSummary) do
+			print(line)
+		end
+		print(string.format(" Recoveries:   %d", telemetry.recoveryEvents))
+		print("───────────────────────────────────────────")
+		print(string.format(" Emotional:    [%s]", emotionalTag))
+		print("═══════════════════════════════════════════")
+
+		-- Reset for next match
+		resetTelemetry()
+	end
+end
+
+TickManager.RegisterHandler("Replication", TelemetryLogger.OnReplicationPhase)
+
+return TelemetryLogger
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="23">
+      <Properties>
+        <string name="Name">TickManager</string>
+        <string name="Source"><![CDATA[--[=[
+	TickManager.lua
+	Enforces deterministic simulation updates.
+	Includes drift protection and simulation lifecycle ownership.
+]=]
+
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
+
+local TickManager = {
+	_activeMatchState = nil,
+	_randomGenerator = nil, -- Deterministic per-match RNG
+
+	_phases = {
+		Input = {},
+		Physics = {},
+		Collision = {},
+		Clamp = {},
+		StateUpdate = {},
+		Evaluation = {},
+		Replication = {},
+	},
+
+	_accumulator = 0,
+	_tickDuration = 1 / Constants.SimulationTickRate,
+	_connection = nil,
+	_onMatchFinishedCallback = nil,
+}
+
+function TickManager.RegisterHandler(phaseName: string, handlerFn: (any) -> ())
+	if TickManager._phases[phaseName] then
+		table.insert(TickManager._phases[phaseName], handlerFn)
+	end
+end
+
+function TickManager.SetMatchState(matchState)
+	TickManager._activeMatchState = matchState
+	TickManager._randomGenerator = Random.new(matchState.matchSeed)
+end
+
+function TickManager.SetMatchFinishedCallback(callback)
+	TickManager._onMatchFinishedCallback = callback
+end
+
+function TickManager.GetRandom()
+	return TickManager._randomGenerator
+end
+
+local function executePhase(phaseName: string, matchState)
+	for _, handlerFn in ipairs(TickManager._phases[phaseName]) do
+		local success, err = pcall(handlerFn, matchState)
+		if not success then
+			warn(string.format("[TickManager] Error in Phase '%s' — %s", phaseName, tostring(err)))
+		end
+	end
+end
+
+local function onHeartbeat(dt: number)
+	if not TickManager._activeMatchState or TickManager._activeMatchState.phase == "Finished" then return end
+
+	TickManager._accumulator += dt
+
+	-- Drift Protection: Prevent death spirals if server lags heavily
+	if TickManager._accumulator > (Constants.MaxCatchupTicks * TickManager._tickDuration) then
+		warn("[TickManager] Server lagging, clamping drift: " .. string.format("%.3f", TickManager._accumulator))
+		TickManager._accumulator = TickManager._tickDuration -- Clamp to 1 tick
+	end
+
+	while TickManager._accumulator >= TickManager._tickDuration do
+		TickManager._accumulator -= TickManager._tickDuration
+
+		local state = TickManager._activeMatchState
+
+		if state.phase == "Countdown" then
+			if workspace:GetServerTimeNow() >= state.timers.countdownEndTime then
+				state.phase = "Active"
+				print("[Match] Phase transition: Countdown -> Active")
+				table.insert(state.tickEvents, { eventType = "MatchStarted", eventData = {} })
+				
+				local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
+				Remotes.MatchStateChanged:FireAllClients(state.phase, { matchId = state.matchId })
+			end
+			-- During countdown, skip Physics/Collision/Evaluation, just Replicate
+			executePhase("Replication", state)
+		else
+			executePhase("Input", state)
+			executePhase("Physics", state)
+			executePhase("Collision", state)
+			executePhase("Clamp", state)
+			executePhase("StateUpdate", state)
+			executePhase("Evaluation", state)
+			executePhase("Replication", state)
+		end
+
+		-- Clear events for the next tick
+		table.clear(state.tickEvents)
+
+		-- Tick cooldowns
+		for key, ticksLeft in pairs(state.collisionCooldowns) do
+			if ticksLeft > 1 then
+				state.collisionCooldowns[key] = ticksLeft - 1
+			else
+				state.collisionCooldowns[key] = nil
+			end
+		end
+
+		state.tickNumber += 1
+		state.serverTimestamp = workspace:GetServerTimeNow()
+
+		-- Lifecycle: Check if SpinEvaluator flagged the match as finished
+		if state.finishFlags.matchEnded then
+			state.phase = "Finished"
+			print(string.format("[Match] Phase transition: Active -> Finished | Winner: %s", tostring(state.currentWinner)))
+			table.insert(state.tickEvents, {
+				eventType = "MatchFinished",
+				eventData = { winner = state.currentWinner },
+			})
+
+			local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
+			Remotes.MatchStateChanged:FireAllClients(state.phase, { 
+				matchId = state.matchId, 
+				winner = state.currentWinner 
+			})
+
+			if TickManager._onMatchFinishedCallback then
+				task.spawn(TickManager._onMatchFinishedCallback, state)
+			end
+		end
+	end
+end
+
+function TickManager.Start()
+	if not TickManager._connection then
+		TickManager._connection = RunService.Heartbeat:Connect(onHeartbeat)
+		print("[TickManager] Simulation started.")
+	end
+end
+
+function TickManager.Stop()
+	if TickManager._connection then
+		TickManager._connection:Disconnect()
+		TickManager._connection = nil
+		print("[TickManager] Simulation stopped.")
+	end
+end
+
+return TickManager
+]]></string>
+      </Properties>
+    </Item>
+  </Item>
+  <Item class="ServerStorage" referent="24">
+    <Properties>
+      <string name="Name">ServerStorage</string>
+    </Properties>
+    <Item class="Folder" referent="25">
+      <Properties>
+        <string name="Name">ServerShared</string>
+      </Properties>
+    </Item>
+  </Item>
+  <Item class="StarterPlayer" referent="26">
+    <Properties>
+      <string name="Name">StarterPlayer</string>
+    </Properties>
+    <Item class="StarterPlayerScripts" referent="27">
+      <Properties>
+        <string name="Name">StarterPlayerScripts</string>
+      </Properties>
+      <Item class="LocalScript" referent="28">
+        <Properties>
+          <string name="Name">DebugOverlayUI</string>
+          <string name="Source"><![CDATA[-- src/StarterPlayerScripts/DebugOverlayUI.client.lua
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "BeyArenaDebugOverlay"
+gui.ResetOnSpawn = false
+
+local textLabel = Instance.new("TextLabel")
+textLabel.Size = UDim2.new(0, 300, 0, 400)
+textLabel.Position = UDim2.new(0, 10, 0, 10)
+textLabel.BackgroundTransparency = 0.5
+textLabel.BackgroundColor3 = Color3.new(0,0,0)
+textLabel.TextColor3 = Color3.new(1,1,1)
+textLabel.TextXAlignment = Enum.TextXAlignment.Left
+textLabel.TextYAlignment = Enum.TextYAlignment.Top
+textLabel.TextSize = 14
+textLabel.Font = Enum.Font.Code
+textLabel.Parent = gui
+
+gui.Parent = playerGui
+
+Remotes.StateSnapshot.OnClientEvent:Connect(function(snapshot)
+    local display = "--- BEY ARENA DEBUG ---\n"
+    display ..= "Tick: " .. snapshot.tickNumber .. "\n"
+    display ..= "Time: " .. string.format("%.2f", snapshot.serverTimestamp) .. "\n\n"
+    
+    for pid, bState in pairs(snapshot.beyStates) do
+        display ..= "Player " .. tostring(pid) .. " (" .. bState.zoneState .. ")\n"
+        display ..= string.format(" Pos: %.1f, %.1f, %.1f\n", bState.position.X, bState.position.Y, bState.position.Z)
+        display ..= string.format(" Vel: %.1f, %.1f, %.1f\n", bState.velocity.X, bState.velocity.Y, bState.velocity.Z)
+        display ..= string.format(" RPM: %.1f | Tilt: %.1f\n", bState.angularVelocity.Magnitude, bState.tilt)
+        display ..= string.format(" Stability: %.1f\n\n", bState.stability)
+    end
+    
+    for _, ev in ipairs(snapshot.events) do
+        display ..= "EVENT: " .. ev.eventType .. "\n"
+    end
+    
+    textLabel.Text = display
+end)
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="LocalScript" referent="29">
+        <Properties>
+          <string name="Name">DebugVisualizer</string>
+          <string name="Source"><![CDATA[--[=[
+	DebugVisualizer.client.lua
+	World-space debug visualization for Prototype 1 testing.
+	Toggle all visuals with F3.
+
+	Renders:
+	- Velocity vectors (blue arrows)
+	- Collision normals (yellow arrows at contact point)
+	- Wobble direction (magenta line from bey top)
+	- Bowl-center influence (faint green line to origin)
+	- Collision severity markers (flash sphere: green=Light, orange=Heavy, red=Smash)
+]=]
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
+
+local DEBUG_ENABLED = false
+local DEBUG_FOLDER_NAME = "DebugVisuals"
+
+-- ── Part Pool ────────────────────────────────────────────────────────
+local partPool = {}
+local activePartCount = 0
+
+local function getDebugFolder()
+	local folder = workspace:FindFirstChild(DEBUG_FOLDER_NAME)
+	if not folder then
+		folder = Instance.new("Folder")
+		folder.Name = DEBUG_FOLDER_NAME
+		folder.Parent = workspace
+	end
+	return folder
+end
+
+local function acquirePart()
+	activePartCount += 1
+	if partPool[activePartCount] then
+		local p = partPool[activePartCount]
+		p.Transparency = 0
+		return p
+	end
+
+	local part = Instance.new("Part")
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanTouch = false
+	part.CanQuery = false
+	part.Material = Enum.Material.Neon
+	part.TopSurface = Enum.SurfaceType.Smooth
+	part.BottomSurface = Enum.SurfaceType.Smooth
+	part.Parent = getDebugFolder()
+	partPool[activePartCount] = part
+	return part
+end
+
+local function resetPool()
+	for i = activePartCount + 1, #partPool do
+		partPool[i].Transparency = 1
+		partPool[i].Size = Vector3.new(0.01, 0.01, 0.01)
+	end
+	-- Also hide anything beyond current count
+	for i = 1, #partPool do
+		if i > activePartCount then
+			partPool[i].Transparency = 1
+			partPool[i].Size = Vector3.new(0.01, 0.01, 0.01)
+		end
+	end
+	activePartCount = 0
+end
+
+local function drawLine(from: Vector3, to: Vector3, color: Color3, thickness: number)
+	local part = acquirePart()
+	local mid = (from + to) / 2
+	local diff = to - from
+	local length = diff.Magnitude
+
+	if length < 0.01 then
+		part.Transparency = 1
+		return
+	end
+
+	part.Size = Vector3.new(thickness, thickness, length)
+	part.CFrame = CFrame.lookAt(mid, to)
+	part.Color = color
+	part.Transparency = 0.3
+end
+
+local function drawSphere(position: Vector3, radius: number, color: Color3, transparency: number)
+	local part = acquirePart()
+	part.Shape = Enum.PartType.Ball
+	part.Size = Vector3.new(radius * 2, radius * 2, radius * 2)
+	part.Position = position
+	part.Color = color
+	part.Transparency = transparency or 0.4
+end
+
+-- ── Collision Event Cache ────────────────────────────────────────────
+local recentCollisions = {} -- { {position, severity, timeRemaining} }
+
+Remotes.StateSnapshot.OnClientEvent:Connect(function(snapshot)
+	if not DEBUG_ENABLED then return end
+
+	for _, ev in ipairs(snapshot.events) do
+		if ev.eventType == "Collision" then
+			table.insert(recentCollisions, {
+				position = ev.eventData.position,
+				severity = ev.eventData.collisionClass,
+				timeRemaining = 0.5, -- Flash duration
+			})
+		end
+	end
+end)
+
+-- ── Toggle ───────────────────────────────────────────────────────────
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	if input.KeyCode == Enum.KeyCode.F3 then
+		DEBUG_ENABLED = not DEBUG_ENABLED
+		print(string.format("[DebugViz] World-space debug visualization: %s", DEBUG_ENABLED and "ON" or "OFF"))
+
+		if not DEBUG_ENABLED then
+			-- Hide all
+			for _, p in ipairs(partPool) do
+				p.Transparency = 1
+				p.Size = Vector3.new(0.01, 0.01, 0.01)
+			end
+			recentCollisions = {}
+		end
+	end
+end)
+
+-- ── Severity Colors ──────────────────────────────────────────────────
+local SEVERITY_COLORS = {
+	Light = Color3.fromRGB(80, 220, 80), -- Green
+	Heavy = Color3.fromRGB(255, 165, 0), -- Orange
+	Smash = Color3.fromRGB(255, 40, 40), -- Red
+}
+
+-- ── Render Loop ──────────────────────────────────────────────────────
+local latestSnapshot = nil
+
+Remotes.StateSnapshot.OnClientEvent:Connect(function(snapshot)
+	latestSnapshot = snapshot
+end)
+
+RunService.RenderStepped:Connect(function(dt)
+	if not DEBUG_ENABLED then return end
+
+	resetPool()
+
+	local snapshot = latestSnapshot
+	if not snapshot then return end
+
+	for pid, bState in pairs(snapshot.beyStates) do
+		local pos = bState.position
+		if not pos then continue end
+
+		-- 1. Velocity vector (blue arrow)
+		local vel = bState.velocity
+		if vel and vel.Magnitude > 0.5 then
+			local velEnd = pos + vel.Unit * math.min(vel.Magnitude * 0.15, 10)
+			drawLine(pos, velEnd, Color3.fromRGB(60, 130, 255), 0.15)
+		end
+
+		-- 2. Bowl-center influence (faint green line to origin)
+		local origin = Vector3.new(0, pos.Y, 0)
+		drawLine(pos, origin, Color3.fromRGB(40, 180, 40), 0.06)
+
+		-- 3. Wobble direction (magenta tilt indicator from bey top)
+		local tiltRad = math.rad(bState.tilt or 0)
+		if tiltRad > 0.01 then
+			local tiltDir = Vector3.new(math.sin(tiltRad), 0, math.cos(tiltRad))
+			local topPos = pos + Vector3.new(0, 2, 0)
+			local wobbleEnd = topPos + tiltDir * math.min(bState.tilt * 0.1, 5)
+			drawLine(topPos, wobbleEnd, Color3.fromRGB(220, 60, 220), 0.12)
+		end
+	end
+
+	-- 4. Collision severity markers (flash spheres)
+	local remaining = {}
+	for _, col in ipairs(recentCollisions) do
+		col.timeRemaining -= dt
+		if col.timeRemaining > 0 then
+			local color = SEVERITY_COLORS[col.severity] or SEVERITY_COLORS.Light
+			local fadeAlpha = math.clamp(col.timeRemaining / 0.5, 0, 1)
+			drawSphere(col.position, 1.5 * fadeAlpha + 0.5, color, 1 - fadeAlpha * 0.6)
+			table.insert(remaining, col)
+		end
+	end
+	recentCollisions = remaining
+end)
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="LocalScript" referent="30">
+        <Properties>
+          <string name="Name">InputController</string>
+          <string name="Source"><![CDATA[--[=[
+	InputController.client.lua
+	Listens for user inputs and securely pushes them to the server.
+]=]
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
+
+local sequenceId = 0
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+
+	-- Press 'F' to launch
+	if input.KeyCode == Enum.KeyCode.F then
+		sequenceId += 1
+		print("[Client:Input] Local input received: Launch (F key)")
+
+		-- Prototype 1 deterministic fixed launch data
+		local launchData = {
+			launchVector = Vector3.new(15, 0, -15), -- Fixed vector for testing repeatability
+			spinPower = 100,
+		}
+
+		Remotes.RequestLaunch:FireServer(sequenceId, launchData)
+		print(string.format("[Client:Input] Remote launch request sent (Seq: %d)", sequenceId))
+	end
+end)
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="LocalScript" referent="31">
+        <Properties>
+          <string name="Name">InterpolationRenderer</string>
+          <string name="Source"><![CDATA[--[=[
+	InterpolationRenderer.client.lua
+	Buffers server snapshots to smoothly Lerp authoritative CFrame states.
+	Preserves arcs, visualizes hitstop, and dynamically renders RPM spin.
+]=]
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
+local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
+
+local snapshotBuffer = {}
+local RENDER_DELAY = Constants.InterpolationDelay
+local SNAPSHOT_BUFFER_MAX = Constants.SnapshotBufferMax
+
+local beyVisuals = {} -- { [pid] = { rotation = 0, hitstop = 0, spinDownPlaying = false } }
+
+local function getBeyModel(playerId)
+	return workspace:FindFirstChild("Bey_" .. tostring(playerId))
+end
+
+-- Collision audio by severity
+-- Replace these SoundId values with audio from Studio Toolbox > Free Audio
+local COLLISION_SOUNDS = {
+	Light = { id = "", pitch = 1.3, volume = 0.25 },
+	Heavy = { id = "", pitch = 1.0, volume = 0.6 },
+	Smash = { id = "", pitch = 0.7, volume = 1.0 },
+}
+
+local function playCollisionSound(severity)
+	local cfg = COLLISION_SOUNDS[severity] or COLLISION_SOUNDS.Light
+	local sound = Instance.new("Sound")
+	sound.SoundId = cfg.id
+	sound.PlaybackSpeed = cfg.pitch
+	sound.Volume = cfg.volume
+	sound.Parent = workspace
+	sound:Play()
+	game.Debris:AddItem(sound, 2)
+end
+
+-- Spin-down audio: low grinding/whirring when angular velocity drops
+local spinDownSounds = {} -- { [pid] = Sound }
+
+local function updateSpinDownAudio(pid, angularMagnitude)
+	if not beyVisuals[pid] then return end
+
+	local model = getBeyModel(pid)
+	if not model then return end
+
+	if angularMagnitude < Constants.SpinDownAudioThreshold and angularMagnitude > Constants.MinEffectiveSpinThreshold then
+		-- Should be playing spin-down
+		if not spinDownSounds[pid] then
+			local sound = Instance.new("Sound")
+			sound.SoundId = "" -- Replace with a looping grind sound from Studio Toolbox
+			sound.Looped = true
+			sound.Volume = 0
+			sound.PlaybackSpeed = 0.4
+			sound.Parent = model
+			sound:Play()
+			spinDownSounds[pid] = sound
+		end
+
+		-- Fade in as spin drops — louder as it nears threshold
+		local ratio = 1 - (angularMagnitude - Constants.MinEffectiveSpinThreshold) / (Constants.SpinDownAudioThreshold - Constants.MinEffectiveSpinThreshold)
+		spinDownSounds[pid].Volume = math.clamp(ratio * 0.5, 0, 0.5)
+		spinDownSounds[pid].PlaybackSpeed = 0.3 + ratio * 0.2
+	else
+		-- Stop spin-down audio
+		if spinDownSounds[pid] then
+			spinDownSounds[pid]:Stop()
+			spinDownSounds[pid]:Destroy()
+			spinDownSounds[pid] = nil
+		end
+	end
+end
+
+Remotes.StateSnapshot.OnClientEvent:Connect(function(snapshot)
+	table.insert(snapshotBuffer, snapshot)
+
+	if #snapshotBuffer > SNAPSHOT_BUFFER_MAX then
+		table.remove(snapshotBuffer, 1)
+	end
+
+	-- Process events for hitstop and audio
+	for _, ev in ipairs(snapshot.events) do
+		if ev.eventType == "Collision" then
+			local class = ev.eventData.collisionClass
+
+			-- Hitstop
+			local hitstopDuration = 0
+			if class == "Smash" then
+				hitstopDuration = Constants.HitstopSmash
+			elseif class == "Heavy" then
+				hitstopDuration = Constants.HitstopHeavy
+			end
+
+			-- Apply hitstop to involved beys
+			for _, pid in ipairs(ev.eventData.involvedBeys) do
+				if not beyVisuals[pid] then beyVisuals[pid] = { rotation = 0, hitstop = 0 } end
+				if hitstopDuration > 0 then
+					beyVisuals[pid].hitstop = hitstopDuration
+				end
+			end
+
+			-- Collision audio
+			playCollisionSound(class)
+		end
+	end
+end)
+
+RunService.RenderStepped:Connect(function(dt)
+	local renderTime = workspace:GetServerTimeNow() - RENDER_DELAY
+
+	local snap0, snap1 = nil, nil
+	for i = #snapshotBuffer, 1, -1 do
+		if snapshotBuffer[i].serverTimestamp <= renderTime then
+			snap0 = snapshotBuffer[i]
+			snap1 = snapshotBuffer[i + 1]
+			break
+		end
+	end
+
+	if snap0 and snap1 then
+		-- Epsilon denominator protection against NaN
+		local timeDiff = math.max(0.0001, snap1.serverTimestamp - snap0.serverTimestamp)
+		local alpha = math.clamp((renderTime - snap0.serverTimestamp) / timeDiff, 0, 1)
+
+		for pid, bState0 in pairs(snap0.beyStates) do
+			local bState1 = snap1.beyStates[pid]
+			if bState1 then
+				if not beyVisuals[pid] then beyVisuals[pid] = { rotation = 0, hitstop = 0 } end
+				local vis = beyVisuals[pid]
+
+				-- Process visual hitstop freeze
+				if vis.hitstop > 0 then
+					vis.hitstop -= dt
+					continue
+				end
+
+				-- Accumulate spin derived from actual physical RPM
+				local angMag = bState0.angularVelocity.Magnitude
+				vis.rotation += angMag * dt
+
+				-- Spin-down audio
+				updateSpinDownAudio(pid, angMag)
+
+				local model = getBeyModel(pid)
+				if model then
+					local interpPos = bState0.position:Lerp(bState1.position, alpha)
+					-- Amplify tilt for readability (predict losers easily)
+					local tiltAngle = math.rad(bState0.tilt * 1.5)
+
+					model:PivotTo(CFrame.new(interpPos) * CFrame.Angles(tiltAngle, vis.rotation, 0))
+				end
+			end
+		end
+	elseif snap0 then
+		for pid, bState0 in pairs(snap0.beyStates) do
+			if not beyVisuals[pid] then beyVisuals[pid] = { rotation = 0, hitstop = 0 } end
+			local vis = beyVisuals[pid]
+
+			if vis.hitstop > 0 then
+				vis.hitstop -= dt
+				continue
+			end
+
+			local angMag = bState0.angularVelocity.Magnitude
+			vis.rotation += angMag * dt
+
+			updateSpinDownAudio(pid, angMag)
+
+			local model = getBeyModel(pid)
+			if model then
+				local tiltAngle = math.rad(bState0.tilt * 1.5)
+				model:PivotTo(CFrame.new(bState0.position) * CFrame.Angles(tiltAngle, vis.rotation, 0))
+			end
+		end
+	end
+end)
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="LocalScript" referent="32">
+        <Properties>
+          <string name="Name">SpectatorCameraController</string>
+          <string name="Source"><![CDATA[--[=[
+    SpectatorCameraController.client.lua
+    Locks the local player's camera to a fixed isometric stadium view.
+    Ensures players can watch the battle clearly from launch to finish.
+]=]
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+
+local player = Players.LocalPlayer
+
+local function lockCamera()
+    local camera = workspace.CurrentCamera
+    if not camera then return end
+
+    -- Position high and slightly back, looking at center (0,0,0)
+    local targetCFrame = CFrame.lookAt(Vector3.new(0, 30, 30), Vector3.new(0, 0, 0))
+    
+    camera.CameraType = Enum.CameraType.Scriptable
+    camera.CFrame = targetCFrame
+end
+
+-- Constantly enforce the camera lock so it doesn't reset when characters spawn/die
+RunService.RenderStepped:Connect(lockCamera)
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="LocalScript" referent="33">
+        <Properties>
+          <string name="Name">UIController</string>
+          <string name="Source"><![CDATA[--[=[
+    UIController.client.lua
+    Handles primary match UI (launch timing bar, match countdown).
+]=]
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
+
+local localPlayer = Players.LocalPlayer
+local playerGui = localPlayer:WaitForChild("PlayerGui")
+
+-- Setup UI
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "MatchStatusGui"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Name = "StatusLabel"
+statusLabel.Size = UDim2.new(1, 0, 0, 100)
+statusLabel.Position = UDim2.new(0, 0, 0, 50)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Font = Enum.Font.GothamBold
+statusLabel.TextSize = 48
+statusLabel.TextColor3 = Color3.new(1, 1, 1)
+statusLabel.TextStrokeTransparency = 0
+statusLabel.Text = "Waiting for match..."
+statusLabel.Parent = screenGui
+
+local resultLabel = Instance.new("TextLabel")
+resultLabel.Name = "ResultLabel"
+resultLabel.Size = UDim2.new(1, 0, 0, 150)
+resultLabel.Position = UDim2.new(0, 0, 0.5, -75)
+resultLabel.BackgroundTransparency = 1
+resultLabel.Font = Enum.Font.GothamBlack
+resultLabel.TextSize = 72
+resultLabel.TextColor3 = Color3.new(1, 0.8, 0)
+resultLabel.TextStrokeTransparency = 0
+resultLabel.Text = ""
+resultLabel.Visible = false
+resultLabel.Parent = screenGui
+
+local currentPhase = "None"
+local countdownEndTime = 0
+
+Remotes.MatchStateChanged.OnClientEvent:Connect(function(phase, data)
+	currentPhase = phase
+	if phase == "Countdown" then
+		countdownEndTime = data.countdownEndTime
+		resultLabel.Visible = false
+	elseif phase == "Active" then
+		statusLabel.Text = "BATTLE!"
+		task.delay(2, function()
+			if currentPhase == "Active" then
+				statusLabel.Text = ""
+			end
+		end)
+	elseif phase == "Finished" then
+		statusLabel.Text = "MATCH FINISHED"
+		local winnerId = data.winner
+		
+		resultLabel.Visible = true
+		if winnerId == "Draw" then
+			resultLabel.Text = "DRAW"
+			resultLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+		elseif winnerId == localPlayer.UserId then
+			resultLabel.Text = "YOU WIN!"
+			resultLabel.TextColor3 = Color3.fromRGB(50, 255, 50)
+		else
+			resultLabel.Text = "YOU LOSE"
+			resultLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
+		end
+	end
+end)
+
+RunService.RenderStepped:Connect(function()
+	if currentPhase == "Countdown" then
+		local remaining = countdownEndTime - workspace:GetServerTimeNow()
+		if remaining > 0 then
+			statusLabel.Text = string.format("Match Starting In: %.1f", remaining)
+		else
+			statusLabel.Text = "READY..."
+		end
+	end
+end)
+]]></string>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+</roblox>

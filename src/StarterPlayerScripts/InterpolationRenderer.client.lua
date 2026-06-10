@@ -1,7 +1,8 @@
 --[=[
 	InterpolationRenderer.client.lua
-	Buffers server snapshots to smoothly Lerp authoritative CFrame states.
-	Preserves arcs, visualizes hitstop, and dynamically renders RPM spin.
+	Buffers server snapshots and smoothly lerps Bey CFrame states at render rate.
+	Handles: spin rotation, tilt amplification, hitstop, spin-down audio,
+	         command-state glow (Attack/Defend/Evade), ring-out danger pulse.
 ]=]
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -12,21 +13,71 @@ local snapshotBuffer = {}
 local RENDER_DELAY = Constants.InterpolationDelay
 local SNAPSHOT_BUFFER_MAX = Constants.SnapshotBufferMax
 
-local beyVisuals = {} -- { [pid] = { rotation = 0, hitstop = 0, spinDownPlaying = false } }
+-- Per-player visual state
+-- { rotation, hitstop, commandGlow (PointLight), ringOutBox (SelectionBox) }
+local beyVisuals = {}
 
-local function getBeyModel(playerId)
-	return workspace:FindFirstChild("Bey_" .. tostring(playerId))
+local function getBeyModel(pid)
+	return workspace:FindFirstChild("Bey_" .. tostring(pid))
 end
 
--- Collision audio by severity
+-- Lazily create and attach visual effect instances to the Bey model.
+local function ensureVisuals(pid)
+	if beyVisuals[pid] then return beyVisuals[pid] end
+	beyVisuals[pid] = { rotation = 0, hitstop = 0, commandGlow = nil, ringOutBox = nil }
+	return beyVisuals[pid]
+end
+
+local function ensureCommandGlow(pid, model)
+	local vis = beyVisuals[pid]
+	if vis.commandGlow then return vis.commandGlow end
+	local pivot = model:FindFirstChild("Pivot") or model.PrimaryPart
+	if not pivot then return nil end
+	local light = Instance.new("PointLight")
+	light.Name = "CommandGlow"
+	light.Brightness = 0
+	light.Range = 16
+	light.Shadows = false
+	light.Parent = pivot
+	vis.commandGlow = light
+	return light
+end
+
+local function ensureRingOutBox(pid, model)
+	local vis = beyVisuals[pid]
+	if vis.ringOutBox then return vis.ringOutBox end
+	local box = Instance.new("SelectionBox")
+	box.Name = "RingOutWarning"
+	box.Color3 = Color3.fromRGB(255, 60, 0)
+	box.LineThickness = 0.08
+	box.SurfaceTransparency = 0.85
+	box.SurfaceColor3 = Color3.fromRGB(255, 60, 0)
+	box.Visible = false
+	box.Adornee = model
+	box.Parent = model
+	vis.ringOutBox = box
+	return box
+end
+
+-- ── Command glow colours ──────────────────────────────────────────────────────
+
+local COMMAND_GLOW = {
+	Attack = { color = Color3.fromRGB(255, 60,  60),  brightness = 3 },
+	Defend = { color = Color3.fromRGB(60,  100, 255), brightness = 3 },
+	Evade  = { color = Color3.fromRGB(60,  220, 60),  brightness = 3 },
+}
+
+-- ── Collision audio ───────────────────────────────────────────────────────────
+
 local COLLISION_SOUNDS = {
-	Light = { id = "rbxassetid://186884155", pitch = 1.3, volume = 0.25 },
-	Heavy = { id = "rbxassetid://186884155", pitch = 1.0, volume = 0.6 },
-	Smash = { id = "rbxassetid://186884155", pitch = 0.7, volume = 1.0 },
+	Light = { id = "", pitch = 1.3, volume = 0.25 },
+	Heavy = { id = "", pitch = 1.0, volume = 0.6 },
+	Smash = { id = "", pitch = 0.7, volume = 1.0 },
 }
 
 local function playCollisionSound(severity)
 	local cfg = COLLISION_SOUNDS[severity] or COLLISION_SOUNDS.Light
+	if cfg.id == "" then return end -- no asset id assigned yet; skip to avoid console errors
 	local sound = Instance.new("Sound")
 	sound.SoundId = cfg.id
 	sound.PlaybackSpeed = cfg.pitch
@@ -36,20 +87,19 @@ local function playCollisionSound(severity)
 	game.Debris:AddItem(sound, 2)
 end
 
--- Spin-down audio: low grinding/whirring when angular velocity drops
-local spinDownSounds = {} -- { [pid] = Sound }
+-- ── Spin-down audio ───────────────────────────────────────────────────────────
 
-local function updateSpinDownAudio(pid, angularMagnitude)
+local spinDownSounds = {}
+
+local function updateSpinDownAudio(pid, angMag)
 	if not beyVisuals[pid] then return end
-
 	local model = getBeyModel(pid)
 	if not model then return end
 
-	if angularMagnitude < Constants.SpinDownAudioThreshold and angularMagnitude > Constants.MinEffectiveSpinThreshold then
-		-- Should be playing spin-down
+	if angMag < Constants.SpinDownAudioThreshold and angMag > Constants.MinEffectiveSpinThreshold then
 		if not spinDownSounds[pid] then
 			local sound = Instance.new("Sound")
-			sound.SoundId = "rbxassetid://186884155" -- Placeholder grinding
+			sound.SoundId = ""
 			sound.Looped = true
 			sound.Volume = 0
 			sound.PlaybackSpeed = 0.4
@@ -57,13 +107,11 @@ local function updateSpinDownAudio(pid, angularMagnitude)
 			sound:Play()
 			spinDownSounds[pid] = sound
 		end
-
-		-- Fade in as spin drops — louder as it nears threshold
-		local ratio = 1 - (angularMagnitude - Constants.MinEffectiveSpinThreshold) / (Constants.SpinDownAudioThreshold - Constants.MinEffectiveSpinThreshold)
+		local ratio = 1 - (angMag - Constants.MinEffectiveSpinThreshold)
+			/ (Constants.SpinDownAudioThreshold - Constants.MinEffectiveSpinThreshold)
 		spinDownSounds[pid].Volume = math.clamp(ratio * 0.5, 0, 0.5)
 		spinDownSounds[pid].PlaybackSpeed = 0.3 + ratio * 0.2
 	else
-		-- Stop spin-down audio
 		if spinDownSounds[pid] then
 			spinDownSounds[pid]:Stop()
 			spinDownSounds[pid]:Destroy()
@@ -72,42 +120,41 @@ local function updateSpinDownAudio(pid, angularMagnitude)
 	end
 end
 
+-- ── Snapshot receive ──────────────────────────────────────────────────────────
+
 Remotes.StateSnapshot.OnClientEvent:Connect(function(snapshot)
 	table.insert(snapshotBuffer, snapshot)
-
 	if #snapshotBuffer > SNAPSHOT_BUFFER_MAX then
 		table.remove(snapshotBuffer, 1)
 	end
 
-	-- Process events for hitstop and audio
 	for _, ev in ipairs(snapshot.events) do
 		if ev.eventType == "Collision" then
 			local class = ev.eventData.collisionClass
-
-			-- Hitstop
 			local hitstopDuration = 0
 			if class == "Smash" then
 				hitstopDuration = Constants.HitstopSmash
 			elseif class == "Heavy" then
 				hitstopDuration = Constants.HitstopHeavy
 			end
-
-			-- Apply hitstop to involved beys
 			for _, pid in ipairs(ev.eventData.involvedBeys) do
-				if not beyVisuals[pid] then beyVisuals[pid] = { rotation = 0, hitstop = 0 } end
+				local vis = ensureVisuals(pid)
 				if hitstopDuration > 0 then
-					beyVisuals[pid].hitstop = hitstopDuration
+					vis.hitstop = hitstopDuration
 				end
 			end
-
-			-- Collision audio
 			playCollisionSound(class)
 		end
 	end
 end)
 
+-- ── Render loop ───────────────────────────────────────────────────────────────
+
+local ringOutPulseTime = 0
+
 RunService.RenderStepped:Connect(function(dt)
-	local renderTime = os.clock() - RENDER_DELAY
+	ringOutPulseTime += dt
+	local renderTime = workspace:GetServerTimeNow() - RENDER_DELAY
 
 	local snap0, snap1 = nil, nil
 	for i = #snapshotBuffer, 1, -1 do
@@ -118,57 +165,67 @@ RunService.RenderStepped:Connect(function(dt)
 		end
 	end
 
-	if snap0 and snap1 then
-		-- Epsilon denominator protection against NaN
+	if not snap0 then return end
+
+	local alpha = 0
+	if snap1 then
 		local timeDiff = math.max(0.0001, snap1.serverTimestamp - snap0.serverTimestamp)
-		local alpha = math.clamp((renderTime - snap0.serverTimestamp) / timeDiff, 0, 1)
+		alpha = math.clamp((renderTime - snap0.serverTimestamp) / timeDiff, 0, 1)
+	end
 
-		for pid, bState0 in pairs(snap0.beyStates) do
-			local bState1 = snap1.beyStates[pid]
-			if bState1 then
-				if not beyVisuals[pid] then beyVisuals[pid] = { rotation = 0, hitstop = 0 } end
-				local vis = beyVisuals[pid]
+	for pid, bState0 in pairs(snap0.beyStates) do
+		local vis = ensureVisuals(pid)
+		local model = getBeyModel(pid)
 
-				-- Process visual hitstop freeze
-				if vis.hitstop > 0 then
-					vis.hitstop -= dt
-					continue
-				end
-
-				-- Accumulate spin derived from actual physical RPM
-				local angMag = bState0.angularVelocity.Magnitude
-				vis.rotation += angMag * dt
-
-				-- Spin-down audio
-				updateSpinDownAudio(pid, angMag)
-
-				local model = getBeyModel(pid)
-				if model then
-					local interpPos = bState0.position:Lerp(bState1.position, alpha)
-					local tiltAngle = math.rad(bState0.tilt)
-
-					model.CFrame = CFrame.new(interpPos) * CFrame.Angles(tiltAngle, vis.rotation, 0)
-				end
-			end
+		-- Hitstop freeze
+		if vis.hitstop > 0 then
+			vis.hitstop -= dt
+			continue
 		end
-	elseif snap0 then
-		for pid, bState0 in pairs(snap0.beyStates) do
-			if not beyVisuals[pid] then beyVisuals[pid] = { rotation = 0, hitstop = 0 } end
-			local vis = beyVisuals[pid]
 
-			if vis.hitstop > 0 then
-				vis.hitstop -= dt
-				continue
+		-- Spin accumulation
+		local angMag = bState0.angularVelocity.Magnitude
+		vis.rotation += angMag * dt
+
+		updateSpinDownAudio(pid, angMag)
+
+		if model then
+			-- Position
+			local pos = bState0.position
+			if snap1 then
+				local bState1 = snap1.beyStates[pid]
+				if bState1 then
+					pos = bState0.position:Lerp(bState1.position, alpha)
+				end
 			end
 
-			local angMag = bState0.angularVelocity.Magnitude
-			vis.rotation += angMag * dt
+			-- Tilt amplified 1.5x for readability — makes wobble unmistakable
+			local tiltAngle = math.rad(bState0.tilt * 1.5)
+			model:PivotTo(CFrame.new(pos) * CFrame.Angles(tiltAngle, vis.rotation, 0))
 
-			updateSpinDownAudio(pid, angMag)
+			-- ── Command glow ──────────────────────────────────────────────
+			local glow = ensureCommandGlow(pid, model)
+			if glow then
+				local cmd = bState0.currentCommand
+				if cmd and COMMAND_GLOW[cmd] then
+					glow.Color = COMMAND_GLOW[cmd].color
+					glow.Brightness = COMMAND_GLOW[cmd].brightness
+				else
+					glow.Brightness = 0
+				end
+			end
 
-			local model = getBeyModel(pid)
-			if model then
-				model.CFrame = CFrame.new(bState0.position) * CFrame.Angles(math.rad(bState0.tilt), vis.rotation, 0)
+			-- ── Ring-out danger pulse ─────────────────────────────────────
+			local ringBox = ensureRingOutBox(pid, model)
+			if ringBox then
+				if bState0.zoneState == "RingOut" then
+					ringBox.Visible = true
+					-- 5 Hz pulse: transparency oscillates 0.6–0.9
+					local pulse = 0.75 + 0.15 * math.sin(ringOutPulseTime * math.pi * 10)
+					ringBox.SurfaceTransparency = pulse
+				else
+					ringBox.Visible = false
+				end
 			end
 		end
 	end

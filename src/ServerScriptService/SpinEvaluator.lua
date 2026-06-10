@@ -13,7 +13,8 @@ function SpinEvaluator.OnEvaluationPhase(matchState)
 	local activeCount = 0
 	local lastActiveBey = nil
 
-	for pid, bState in pairs(matchState.beyStates) do
+	for _, pid in ipairs(matchState.playerOrder) do
+		local bState = matchState.beyStates[pid]
 		if bState.zoneState == "Finished" then continue end
 
 		-- Natural spin decay
@@ -22,16 +23,20 @@ function SpinEvaluator.OnEvaluationPhase(matchState)
 
 		local stabilityRatio = bState.stability / Constants.BaseStability
 		if stabilityRatio < 0.3 then
-			-- Non-linear wobble escalation (Death spiral)
+			-- Non-linear wobble escalation (death spiral)
 			bState.tilt = bState.tilt + math.pow(1 - stabilityRatio, 2) * Constants.WobbleAmplification * dt
 		else
-			-- Slight tilt recovery damping during stable motion
+			-- Tilt recovery — Defend command boosts recovery rate
 			if bState.tilt > 0 then
-				bState.tilt = math.max(0, bState.tilt - Constants.WobbleTiltRecoveryRate * dt)
+				local recoveryRate = Constants.WobbleTiltRecoveryRate
+				if bState.currentCommand == "Defend" then
+					recoveryRate = recoveryRate * (1 + Constants.CommandStabilityRecoveryBonus)
+				end
+				bState.tilt = math.max(0, bState.tilt - recoveryRate * dt)
 			end
 		end
 
-		-- Check thresholds
+		-- Check finish thresholds
 		if rpm < Constants.MinEffectiveSpinThreshold or bState.tilt > Constants.WobbleCollapseThreshold then
 			bState.criticalSpinTimer += dt
 			if bState.criticalSpinTimer >= Constants.CriticalSpinWindow then
@@ -40,6 +45,7 @@ function SpinEvaluator.OnEvaluationPhase(matchState)
 				bState.velocity = Vector3.new(0, 0, 0)
 
 				local reason = (rpm < Constants.MinEffectiveSpinThreshold) and "SpinOut" or "WobbleCollapse"
+				bState.finishReason = reason
 				print(string.format("[SpinEvaluator] Bey %d finished: %s (RPM: %.1f, Tilt: %.1f)", pid, reason, rpm, bState.tilt))
 
 				table.insert(matchState.tickEvents, {
@@ -64,20 +70,20 @@ function SpinEvaluator.OnEvaluationPhase(matchState)
 		end
 	end
 
-	-- Explicit Draw handling when all Beys collapse simultaneously
-	local totalPlayers = 0
-	for _ in pairs(matchState.beyStates) do
-		totalPlayers += 1
-	end
+	local totalPlayers = #matchState.playerOrder
 
-	if totalPlayers > 1 then
-		if activeCount == 1 then
-			matchState.finishFlags.matchEnded = true
-			matchState.currentWinner = lastActiveBey
-		elseif activeCount == 0 then
-			matchState.finishFlags.matchEnded = true
+	if activeCount == 0 then
+		matchState.finishFlags.matchEnded = true
+		if totalPlayers == 1 then
+			-- Solo match: return the player's own id so the result UI doesn't show nil/"YOU LOSE"
+			matchState.currentWinner = matchState.playerOrder[1]
+		else
 			matchState.currentWinner = "Draw"
 		end
+	elseif totalPlayers > 1 and activeCount == 1 then
+		-- Last bey standing in a multiplayer match
+		matchState.finishFlags.matchEnded = true
+		matchState.currentWinner = lastActiveBey
 	end
 end
 

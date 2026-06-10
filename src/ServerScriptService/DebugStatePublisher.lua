@@ -23,7 +23,8 @@ function DebugStatePublisher.OnReplicationPhase(matchState)
         })
     end
     
-    for pid, bState in pairs(matchState.beyStates) do
+    for _, pid in ipairs(matchState.playerOrder) do
+        local bState = matchState.beyStates[pid]
         snapshot.beyStates[pid] = {
             position = bState.position,
             velocity = bState.velocity,
@@ -31,6 +32,8 @@ function DebugStatePublisher.OnReplicationPhase(matchState)
             tilt = bState.tilt,
             stability = bState.stability,
             zoneState = bState.zoneState,
+            currentCommand = bState.currentCommand,
+            commandCooldownTimer = bState.commandCooldownTimer,
         }
     end
     
