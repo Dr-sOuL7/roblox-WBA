@@ -158,30 +158,48 @@ local task = {
 
 -- ── Module registry: tokens stand in for Instances, require() resolves them ──
 
-local __defs = {}   -- "Folder/Name" -> loader function(script) -> module value
+local __defs = {}   -- "Folder/Path/Name" -> loader function(script) -> module value
 local __cache = {}
 local __tokens = {}
+local __folders = {}
 
-local function __folderProxy(folderName)
-	return {
-		WaitForChild = function(_self, childName, _timeout)
-			return __tokens[folderName .. "/" .. childName]
-				or error("Shim: no module registered for " .. folderName .. "/" .. childName)
-		end,
-		FindFirstChild = function(_self, childName)
-			return __tokens[folderName .. "/" .. childName]
-		end,
-	}
+-- Folder proxies resolve children as either modules (tokens) or sub-folders,
+-- so nested paths like ServerScriptService/Persistence/ProfileLogic work.
+local function getFolder(folderPath)
+	if not __folders[folderPath] then
+		__folders[folderPath] = {
+			__folderPath = folderPath,
+			WaitForChild = function(_self, childName, _timeout)
+				local childKey = folderPath .. "/" .. childName
+				if __tokens[childKey] then
+					return __tokens[childKey]
+				end
+				if __folders[childKey] then
+					return __folders[childKey]
+				end
+				error("Shim: no module or folder registered for " .. childKey)
+			end,
+			FindFirstChild = function(_self, childName)
+				local childKey = folderPath .. "/" .. childName
+				return __tokens[childKey] or __folders[childKey]
+			end,
+		}
+		-- Materialize ancestors and give this folder a Parent
+		local parentPath = string.match(folderPath, "^(.*)/")
+		if parentPath then
+			__folders[folderPath].Parent = getFolder(parentPath)
+		end
+	end
+	return __folders[folderPath]
 end
 
-local __folders = {
-	ReplicatedStorage = __folderProxy("ReplicatedStorage"),
-	ServerScriptService = __folderProxy("ServerScriptService"),
-}
+local function folderOf(key)
+	return string.match(key, "^(.*)/")
+end
 
 local function __registerToken(key)
-	local folderName = string.match(key, "^(.-)/")
-	__tokens[key] = { __key = key, Parent = __folders[folderName] }
+	getFolder(folderOf(key)) -- ensure the folder chain exists
+	__tokens[key] = { __key = key, Parent = getFolder(folderOf(key)) }
 end
 
 local function require(token)
@@ -191,15 +209,14 @@ local function require(token)
 	end
 	if __cache[key] == nil then
 		local loader = __defs[key] or error("Shim: module not registered: " .. key)
-		local folderName = string.match(key, "^(.-)/")
-		local scriptObj = { Parent = __folders[folderName] }
+		local scriptObj = { Parent = getFolder(folderOf(key)) }
 		__cache[key] = loader(scriptObj)
 	end
 	return __cache[key]
 end
 
 local __services = {
-	ReplicatedStorage = __folders.ReplicatedStorage,
+	ReplicatedStorage = getFolder("ReplicatedStorage"),
 	RunService = {
 		IsServer = function(_self)
 			return true

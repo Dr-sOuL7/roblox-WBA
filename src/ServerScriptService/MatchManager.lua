@@ -14,6 +14,7 @@ local stadiumSpawned = false
 local currentPlayers = {}
 local _onMatchCleanedUpCallback = nil
 local _onReadyForRematch = nil
+local _onMatchFinishedListeners = {}
 
 function MatchManager.OnMatchCleanedUp(callback)
     _onMatchCleanedUpCallback = callback
@@ -21,6 +22,13 @@ end
 
 function MatchManager.OnReadyForRematch(callback)
     _onReadyForRematch = callback
+end
+
+-- Listeners receive the final MatchState before cleanup (winner, beyStates,
+-- finishReasons intact). Used by persistence/StatsRecorder; pcall-isolated so
+-- a listener bug can never stall the rematch loop.
+function MatchManager.OnMatchFinished(callback)
+    table.insert(_onMatchFinishedListeners, callback)
 end
 
 -- Create a highly visible multi-part Prototype Bey model
@@ -236,7 +244,14 @@ function MatchManager.CleanupMatch()
 	end
 end
 
-TickManager.SetMatchFinishedCallback(function()
+TickManager.SetMatchFinishedCallback(function(finishedState)
+	for _, listener in ipairs(_onMatchFinishedListeners) do
+		local ok, err = pcall(listener, finishedState)
+		if not ok then
+			warn("[MatchManager] OnMatchFinished listener error: " .. tostring(err))
+		end
+	end
+
 	print("[Match] Match finished callback triggered. Restarting in 5 seconds...")
 	task.wait(5)
 

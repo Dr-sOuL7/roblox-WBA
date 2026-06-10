@@ -2,14 +2,29 @@
 
 > Single source of truth for phase progress. Update on every implementation cycle.
 > Roadmap authority: `BEY_ARENA_PRODUCTION_PLAN.md` (approved).
-> Last update: 2026-06-10 — Phase 1 completion engineering + harness gates GREEN.
+> Last update: 2026-06-10 — Phase 2 opened (director's call): persistence layer live.
 
 ## Phase
 
-**Phase 1 — Core Gameplay Validation: engineering COMPLETE, harness gates PASS, human gates PENDING.**
+**Phase 2 — Competitive Gameplay: foundations IN PROGRESS.**
 
-Phase 2 (persistence, matchmaking, launch quality, ranked) is **not started**, by
-mandate: it opens only when the human gates in `VALIDATION_RUNBOOK.md` pass.
+Phase 2 was opened by director instruction with Phase 1 human gates (H1–H5)
+still pending. This is sound for the current work because the persistence layer
+touches zero simulation code — but **the human gates remain a hard release gate
+for ranked**: no ranked queue goes live before they pass (`VALIDATION_RUNBOOK.md`).
+
+### Phase 2 progress
+
+| Item | State |
+|---|---|
+| Persistence layer (locking, retries, autosave, BindToClose, versioned schema) | ✅ built — `Persistence/`; 16/16 pure-logic tests pass headless |
+| Stats recording (first real persistence consumer) | ✅ wired via `MatchManager.OnMatchFinished` |
+| Server-scaling decision | ✅ decided — multi-stadium per server, `docs/ADR-001-server-scaling.md` |
+| Multi-match refactor (`MatchInstance`, per-match TickManager) | ⬜ next cycle |
+| Launch-quality system (timing bar → Poor/Good/Perfect ≤ `LaunchBonusCap`) | ⬜ |
+| Matchmaking (MemoryStore queue), ranked/casual split | ⬜ |
+| MMR + rating updates + rank display | ⬜ |
+| Reconnect handling | ⬜ |
 
 ## Gate board
 
@@ -61,17 +76,15 @@ stability→spin coupling (new, kills structural draws), ring-out grace 0.33→0
 
 ## Next actions (strict order)
 
-1. **Run the human gates** (H1–H5, `VALIDATION_RUNBOOK.md`) — 2 testers, ~2 h.
-   Owner: design/test. This is the only thing between here and Phase 2.
-2. On H-gate failures: tune live dials → re-run `_G.RunValidationSuite()` → retry.
-3. On full Phase 1 GO → open Phase 2 in this order (per plan §Phase 2):
-   a. **Persistence layer** (DataStore + session locking + BindToClose + retry —
-      the gating dependency for Phases 2/4/5/6; build once, carefully).
-   b. Server-scaling decision (multi-stadium vs reserved servers) — architectural,
-      decide before matchmaking code.
-   c. Launch-quality system (timing bar → Poor/Good/Perfect within
-      `LaunchBonusCap`; also retires the late-launch quirk noted in the baseline).
-   d. Matchmaking (MemoryStore queue), MMR + ranked/casual split.
+1. **Run the Phase 1 human gates** (H1–H5, `VALIDATION_RUNBOOK.md`) — 2 testers,
+   ~2 h. Still open; hard release gate for ranked. Can run any time — the
+   persistence work does not affect them.
+2. **Multi-match refactor** per ADR-001: `MatchInstance` (per-match state for
+   TickManager/MatchManager), namespaced workspace, matchId-filtered snapshots.
+3. **Launch-quality system** (timing bar → Poor/Good/Perfect ≤ `LaunchBonusCap`;
+   retires the late-launch quirk from the baseline).
+4. **Matchmaking** (MemoryStore queue) + MMR updates + ranked/casual split,
+   on top of the persistence layer.
 
 ## Known issues / debt (tracked, not blocking Phase 1)
 

@@ -37,6 +37,11 @@ local Remotes = require(game:GetService("ReplicatedStorage"):WaitForChild("Remot
 local LaunchValidator = require(script.Parent:WaitForChild("LaunchValidator"))
 local CommandValidator = require(script.Parent:WaitForChild("CommandValidator"))
 
+-- Persistence layer (Phase 2): profile load/release lifecycle + stats recording
+local PersistenceFolder = script.Parent:WaitForChild("Persistence")
+local ProfileStore = require(PersistenceFolder:WaitForChild("ProfileStore"))
+require(PersistenceFolder:WaitForChild("StatsRecorder"))
+
 local waitingPlayers = {}
 local matchInProgress = false
 
@@ -83,6 +88,18 @@ else
 
     Players.PlayerAdded:Connect(function(player)
         print("Server: Player joined: " .. player.Name)
+
+        -- Profile loads in parallel — never blocks the lobby. If the load
+        -- fails in a way that risks data loss (live lock elsewhere, newer
+        -- schema), the player is kicked rather than played without saves.
+        task.spawn(function()
+            local profile, failReason = ProfileStore.LoadProfile(player.UserId)
+            if not profile then
+                warn(string.format("Server: Profile load failed for %s (%s)", player.Name, tostring(failReason)))
+                ProfileStore.KickForFailure(player.UserId, failReason)
+            end
+        end)
+
         table.insert(waitingPlayers, player.UserId)
         scheduleMatchStart()
     end)
@@ -142,6 +159,10 @@ Players.PlayerRemoving:Connect(function(player)
     if idx then
         table.remove(waitingPlayers, idx)
     end
+    -- Save + release the session lock so the player's next server can load
+    task.spawn(function()
+        ProfileStore.ReleaseProfile(player.UserId)
+    end)
 end)
 
 -- Handle launch requests from clients

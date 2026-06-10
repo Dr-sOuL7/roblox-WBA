@@ -32,6 +32,9 @@ MODULES = [
     ("ServerScriptService/BeyController", "src/ServerScriptService/BeyController.lua"),
     ("ServerScriptService/SpinEvaluator", "src/ServerScriptService/SpinEvaluator.lua"),
     ("ServerScriptService/SimulationHarness", "src/ServerScriptService/SimulationHarness.lua"),
+    # Persistence: pure modules only (ProfileStore/StatsRecorder need live Roblox services)
+    ("ServerScriptService/Persistence/ProfileSchema", "src/ServerScriptService/Persistence/ProfileSchema.lua"),
+    ("ServerScriptService/Persistence/ProfileLogic", "src/ServerScriptService/Persistence/ProfileLogic.lua"),
 ]
 
 
