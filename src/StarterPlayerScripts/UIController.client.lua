@@ -384,7 +384,11 @@ Remotes.MatchStateChanged.OnClientEvent:Connect(function(phase, data)
 		resultLabel.Visible = true
 
 		local winnerId = data.winner
-		if winnerId == "Draw" then
+		if data.cancelled then
+			statusLabel.Text = "MATCH CANCELLED"
+			resultLabel.Text = "OPPONENT LEFT"
+			resultLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+		elseif winnerId == "Draw" then
 			resultLabel.Text = "DRAW"
 			resultLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
 		elseif winnerId == localPlayer.UserId then

@@ -204,6 +204,46 @@ elseif mode == "persistence" then
 	local MmrLogic = require(__tokens["ServerScriptService/Matchmaking/MmrLogic"])
 	local MatchQueue = require(__tokens["ServerScriptService/Matchmaking/MatchQueue"])
 
+	print("──────── Pending adjustment tests (offline-safe writes) ────────")
+
+	test("pending: ranked loss applies delta and tally", function()
+		local data = ProfileSchema.defaults()
+		data.mmr = 1200
+		local _, remaining = ProfileLogic.applyPending(data, {
+			{ type = "rankedResult", mmrDelta = -16, result = "Loss" },
+		})
+		expect(data.mmr == 1184 and data.rankedLosses == 1 and #remaining == 0)
+	end)
+	test("pending: multiple adjustments apply in order", function()
+		local data = ProfileSchema.defaults()
+		ProfileLogic.applyPending(data, {
+			{ type = "rankedResult", mmrDelta = 20, result = "Win" },
+			{ type = "rankedResult", mmrDelta = -10, result = "Loss" },
+			{ type = "rankedResult", mmrDelta = 0, result = "Draw" },
+		})
+		expect(data.mmr == 1010, "got " .. tostring(data.mmr))
+		expect(data.rankedWins == 1 and data.rankedLosses == 1 and data.rankedDraws == 1)
+	end)
+	test("pending: mmr never goes negative", function()
+		local data = ProfileSchema.defaults()
+		data.mmr = 5
+		ProfileLogic.applyPending(data, { { type = "rankedResult", mmrDelta = -50, result = "Loss" } })
+		expect(data.mmr == 0)
+	end)
+	test("pending: unknown types are preserved, not dropped", function()
+		local data = ProfileSchema.defaults()
+		local _, remaining = ProfileLogic.applyPending(data, {
+			{ type = "rankedResult", mmrDelta = 1, result = "Win" },
+			{ type = "futureGiftGrant", itemId = "hat" },
+		})
+		expect(#remaining == 1 and remaining[1].type == "futureGiftGrant")
+	end)
+	test("pending: nil list is a no-op", function()
+		local data = ProfileSchema.defaults()
+		local _, remaining = ProfileLogic.applyPending(data, nil)
+		expect(data.mmr == 1000 and #remaining == 0)
+	end)
+
 	print("──────── MMR logic tests ────────")
 
 	test("elo: expected scores are complementary", function()

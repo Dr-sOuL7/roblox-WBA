@@ -122,10 +122,27 @@ end)
 
 -- ── Pairing loop ──────────────────────────────────────────────────────────────
 
+local function rankedMatchesPlayed(profile)
+	return profile.rankedWins + profile.rankedLosses + (profile.rankedDraws or 0)
+end
+
 local function startPair(mode, pair)
 	local party = { pair.a.userId, pair.b.userId }
 	local instance = MatchManager.StartNewMatch(party, { queueMode = mode })
 	if instance then
+		if mode == "Ranked" then
+			-- Snapshot ratings at match start: the finish-time rating math
+			-- must not depend on profiles still being loaded (leavers).
+			local context = {}
+			for _, uid in ipairs(party) do
+				local profile = ProfileStore.GetProfile(uid)
+				context[uid] = profile and {
+					mmr = profile.mmr,
+					played = rankedMatchesPlayed(profile),
+				} or { mmr = MmrLogic.DEFAULT_RATING, played = 0 }
+			end
+			instance.state.rankedContext = context
+		end
 		pushQueueStatus(pair.a.userId, { state = "Matched", mode = mode })
 		pushQueueStatus(pair.b.userId, { state = "Matched", mode = mode })
 		return true
@@ -171,22 +188,20 @@ end)
 
 -- ── Ranked rating updates ─────────────────────────────────────────────────────
 
-local function rankedMatchesPlayed(profile)
-	return profile.rankedWins + profile.rankedLosses + (profile.rankedDraws or 0)
+local function resultFor(score)
+	if score == 1 then return "Win" end
+	if score == 0 then return "Loss" end
+	return "Draw"
 end
 
 local function applyRankedResult(state)
-	if #state.playerOrder ~= 2 then
+	if #state.playerOrder ~= 2 or not state.rankedContext then
 		return -- solo practice or malformed; no rating stakes
 	end
 
 	local idA, idB = state.playerOrder[1], state.playerOrder[2]
-	local profileA = ProfileStore.GetProfile(idA)
-	local profileB = ProfileStore.GetProfile(idB)
-	if not profileA or not profileB then
-		-- A leaver's profile is already released; see module header. The
-		-- present player keeps their pre-match rating this round.
-		warn(string.format("[Matchmaking] Ranked result for %s not fully applied (missing profile)", state.matchId))
+	local ctxA, ctxB = state.rankedContext[idA], state.rankedContext[idB]
+	if not ctxA or not ctxB then
 		return
 	end
 
@@ -201,29 +216,34 @@ local function applyRankedResult(state)
 		return -- no decisive result recorded
 	end
 
-	local oldA, oldB = profileA.mmr, profileB.mmr
+	-- Rating math runs on the start-of-match snapshot: it works identically
+	-- whether a player is still here or left mid-match.
 	local newA, newB = MmrLogic.updateRatings(
-		oldA, oldB, scoreA,
-		MmrLogic.kFor(rankedMatchesPlayed(profileA)),
-		MmrLogic.kFor(rankedMatchesPlayed(profileB))
+		ctxA.mmr, ctxB.mmr, scoreA,
+		MmrLogic.kFor(ctxA.played),
+		MmrLogic.kFor(ctxB.played)
 	)
 
-	ProfileStore.UpdateProfile(idA, function(data)
-		data.mmr = newA
-		data.rankedDraws = data.rankedDraws or 0
-		if scoreA == 1 then data.rankedWins += 1
-		elseif scoreA == 0 then data.rankedLosses += 1
-		else data.rankedDraws += 1 end
-	end)
-	ProfileStore.UpdateProfile(idB, function(data)
-		data.mmr = newB
-		data.rankedDraws = data.rankedDraws or 0
-		if scoreA == 0 then data.rankedWins += 1
-		elseif scoreA == 1 then data.rankedLosses += 1
-		else data.rankedDraws += 1 end
-	end)
+	local updates = {
+		{ id = idA, old = ctxA.mmr, new = newA, result = resultFor(scoreA) },
+		{ id = idB, old = ctxB.mmr, new = newB, result = resultFor(1 - scoreA) },
+	}
 
-	for _, info in ipairs({ { id = idA, old = oldA, new = newA }, { id = idB, old = oldB, new = newB } }) do
+	for _, info in ipairs(updates) do
+		local adjustment = {
+			type = "rankedResult",
+			mmrDelta = info.new - info.old,
+			result = info.result,
+			matchId = state.matchId,
+		}
+		-- Loaded → applied live; released (leaver) → queued in the stored
+		-- envelope and consumed by their next session. Leaving no longer
+		-- dodges the rating hit.
+		task.spawn(function()
+			ProfileStore.QueueOfflineAdjustment(info.id, adjustment)
+			pushProfileSummary(info.id)
+		end)
+
 		local player = Players:GetPlayerByUserId(info.id)
 		if player then
 			Remotes.MmrUpdated:FireClient(player, {
@@ -233,11 +253,10 @@ local function applyRankedResult(state)
 				tier = MmrLogic.tierFor(info.new),
 			})
 		end
-		pushProfileSummary(info.id)
 	end
 
 	print(string.format("[Matchmaking] Ranked result %s: %d %d→%d | %d %d→%d",
-		state.matchId, idA, oldA, newA, idB, oldB, newB))
+		state.matchId, idA, ctxA.mmr, newA, idB, ctxB.mmr, newB))
 end
 
 MatchManager.OnMatchFinished(function(state)

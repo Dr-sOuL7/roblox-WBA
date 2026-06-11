@@ -14,7 +14,10 @@ Hardware: 2 desktop testers (mouse/keyboard). Build: sync with Rojo
 1. Open the place, **Play Solo**. Confirm:
    - Camera frames the whole bowl from the isometric angle and never snaps away
      (no character spawns — this is intended).
-   - A solo match starts after ~2 s: countdown → Active.
+   - A solo practice match starts after ~6–8 s (matchmaking auto-queues you
+     into Casual; a lone player on an idle server gets practice).
+   - Expect a loud "[ProfileStore] DataStores unavailable in Studio" warning —
+     the in-memory mock is intended in Studio without API access.
    - Press **F** → Bey accelerates toward the bowl centre; spin number ~100 on
      the F2 overlay (F2 toggles the debug overlay, default off).
    - Commands: each button glows the Bey (red/blue/green), shows duration then
@@ -84,6 +87,51 @@ After H1–H4, both testers answer independently:
 
 PASS = both answer yes to 1 and 2. Anything else: capture the answers
 verbatim in PROJECT_STATUS.md and tune before re-running H3/H5.
+
+---
+
+# Phase 2 Validation (V-gates)
+
+Run after H1–H5, in a **published test place with Studio API access enabled**
+(real DataStores; the in-memory mock proves nothing about persistence).
+Automated prerequisites already pass headless: 36 logic tests including MMR
+convergence (ρ 0.94), plus the full sim suite.
+
+## Gate V1 — Persistence survives restarts
+Play 3+ matches (stats accrue), note MMR/W-L, shut the server down (or
+`game:Shutdown()` from the command bar), rejoin. PASS: stats and MMR intact,
+no duplicate-session kick, no data loss. Repeat with a second device joining
+FIRST after restart (lock steal path: rejoin within ~90 s must not wipe data).
+
+## Gate V2 — Concurrent matches
+4+ testers → two simultaneous matches must run in different arena slots.
+PASS: each pair sees only its own match (camera, snapshots, result screens),
+telemetry prints two distinct match summaries, no cross-match interference.
+
+## Gate V3 — Ranked loop
+Two testers queue Ranked (UI panel) → match completes → both see an MMR delta
+toast; rejoin later and confirm the new rating persisted. Placement K (first
+10) should move ratings ~±32; settled ~±16.
+
+## Gate V4 — Reconnect (grace)
+Mid-match, one tester closes the client and rejoins within 20 s. PASS: their
+seat resumes (camera on the right arena, commands work, opponent never saw a
+forfeit). The Bey drifted unpiloted meanwhile — that's intended.
+
+## Gate V5 — Abandonment
+Mid-ranked-match, one tester leaves and stays gone. PASS: ~20 s later the
+opponent wins (forfeit), and the leaver's NEXT login shows the rating loss
+applied (pending-adjustment consumption). Verify the winner's gain applied
+immediately.
+
+## Gate V6 — Queue edges
+Switching queues moves you (one queue at a time); Leave clears; a lone casual
+player on an idle server gets solo practice after ~6 s; queueing while in a
+match is rejected.
+
+**Phase 2 completes when V1–V6 and H1–H5 all pass.** Per the plan's criteria:
+ranked/casual live, MMR converges, persistence survives restarts, concurrent
+matches stable.
 
 ---
 

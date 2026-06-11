@@ -33,8 +33,8 @@ function ProfileSchema.defaults()
 			losses = 0,
 			draws = 0,
 			matchesPlayed = 0,
-			finishesBy = { SpinOut = 0, WobbleCollapse = 0, RingOut = 0 },
-			lossesBy = { SpinOut = 0, WobbleCollapse = 0, RingOut = 0 },
+			finishesBy = { SpinOut = 0, WobbleCollapse = 0, RingOut = 0, Forfeit = 0 },
+			lossesBy = { SpinOut = 0, WobbleCollapse = 0, RingOut = 0, Forfeit = 0 },
 		},
 
 		-- Phase 4 reservations (no earn/spend logic until Phase 4)

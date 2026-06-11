@@ -108,6 +108,44 @@ function ProfileLogic.backoffDelay(attempt)
 	return 2 ^ (attempt - 1)
 end
 
+-- ── Pending adjustments (offline-safe writes) ─────────────────────────────────
+-- Writes targeting a profile that is NOT loaded here (e.g. a ranked leaver's
+-- rating loss) are appended to the stored envelope's `pending` list via a
+-- minimal UpdateAsync merge. The session that owns the profile consumes the
+-- list atomically inside its own load/save transforms — adjustments cannot be
+-- lost to a full-envelope overwrite or applied twice. This is also the
+-- foundation Phase 6 receipt-granting reuses.
+
+--[=[
+	Apply every recognised adjustment to `data` (in place). Unrecognised types
+	(from a newer build) are RETURNED as the remaining list — never dropped.
+	Returns (data, remaining).
+]=]
+function ProfileLogic.applyPending(data, pending)
+	local remaining = {}
+	if not pending then
+		return data, remaining
+	end
+
+	for _, adjustment in ipairs(pending) do
+		if adjustment.type == "rankedResult" then
+			data.mmr = math.max(0, (data.mmr or 0) + (adjustment.mmrDelta or 0))
+			data.rankedDraws = data.rankedDraws or 0
+			if adjustment.result == "Win" then
+				data.rankedWins += 1
+			elseif adjustment.result == "Loss" then
+				data.rankedLosses += 1
+			elseif adjustment.result == "Draw" then
+				data.rankedDraws += 1
+			end
+		else
+			table.insert(remaining, adjustment)
+		end
+	end
+
+	return data, remaining
+end
+
 -- ── Stats application (kept pure so the recorder is testable) ─────────────────
 
 --[=[

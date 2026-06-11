@@ -98,6 +98,7 @@ local function newEnvelope()
 		data = ProfileSchema.defaults(),
 		lock = nil,
 		lastSaved = 0,
+		pending = nil, -- offline adjustments awaiting the owning session
 	}
 end
 
@@ -116,6 +117,10 @@ local function tryAcquire(key)
 		if decision == "held" then
 			return nil
 		end
+
+		-- Consume offline adjustments atomically with taking the lock
+		local _, remaining = ProfileLogic.applyPending(stored.data, stored.pending)
+		stored.pending = (#remaining > 0) and remaining or nil
 
 		stored.lock = ProfileLogic.makeLock(SESSION_ID, os.time())
 		return stored
@@ -216,9 +221,15 @@ local function saveProfile(userId, release)
 			end
 		end
 
+		-- Adjustments appended while we held the cache are consumed into OUR
+		-- copy inside this same transform — the full-envelope write below can
+		-- neither lose them nor apply them twice.
+		local _, remaining = ProfileLogic.applyPending(entry.data, stored.pending)
+
 		stored.schemaVersion = entry.version
 		stored.data = entry.data
 		stored.lastSaved = os.time()
+		stored.pending = (#remaining > 0) and remaining or nil
 		-- NOT `release and nil or ...`: and-or collapses a nil first branch
 		stored.lock = if release then nil else ProfileLogic.makeLock(SESSION_ID, os.time())
 		return stored
@@ -239,6 +250,30 @@ end
 
 function ProfileStore.SaveProfile(userId)
 	return saveProfile(userId, false)
+end
+
+--[=[
+	Write to a profile that may not be loaded here. Loaded → applied through
+	the normal cached path. Not loaded → appended to the stored envelope's
+	pending list (a minimal merge that never touches data or the lock); the
+	owning session consumes it atomically. Yields. Returns true on success.
+]=]
+function ProfileStore.QueueOfflineAdjustment(userId, adjustment)
+	local entry = _profiles[userId]
+	if entry and not entry.released then
+		ProfileLogic.applyPending(entry.data, { adjustment })
+		entry.dirty = true
+		return true
+	end
+
+	local key = KEY_PREFIX .. tostring(userId)
+	local ok = updateWithRetry(key, function(stored)
+		stored = stored or newEnvelope()
+		stored.pending = stored.pending or {}
+		table.insert(stored.pending, adjustment)
+		return stored
+	end)
+	return ok
 end
 
 -- Save + unlock on leave. Yields.

@@ -35,17 +35,30 @@ function MatchInstance.fromState(state, slot, arenaOrigin)
 	return self
 end
 
--- Send a MatchStateChanged event to this match's participants only.
-function MatchInstance:BroadcastPhase(payload)
+-- Send a MatchStateChanged event to this match's participants — or to a
+-- single participant when `onlyUserId` is given (reconnect resync).
+function MatchInstance:BroadcastPhase(payload, onlyUserId)
 	local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
 	payload.matchId = self.state.matchId
 	payload.arenaOrigin = self.arenaOrigin
 	for _, pid in ipairs(self.state.playerOrder) do
+		if onlyUserId and pid ~= onlyUserId then continue end
 		local player = Players:GetPlayerByUserId(pid)
 		if player then
 			Remotes.MatchStateChanged:FireClient(player, self.state.phase, payload)
 		end
 	end
+end
+
+-- Re-send everything a rejoining client needs to resume rendering this match.
+function MatchInstance:ResyncPlayer(userId)
+	self:BroadcastPhase({
+		seed = self.state.matchSeed,
+		players = table.clone(self.state.playerOrder),
+		countdownEndTime = self.state.timers.countdownEndTime,
+		launchBarEpoch = self.state.timers.launchBarEpoch,
+		resync = true,
+	}, userId)
 end
 
 --[=[

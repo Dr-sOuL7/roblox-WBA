@@ -43,6 +43,9 @@ local Constants = {
 	-- the slot's world origin, so simulation math is identical in every slot.
 	MaxConcurrentMatches = 4,
 	ArenaSlotSpacing = 200,     -- studs between stadium origins on X
+	-- A dropped player keeps their seat this long; returning resumes the
+	-- match, expiry forfeits it (opponent wins through normal evaluation).
+	ReconnectGraceSeconds = 20,
 
 	-- ── Arena geometry (single source of truth) ───────────────────────────────
 	-- R=50 sphere subtracted from a block gives the curvy bowl floor.

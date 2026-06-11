@@ -110,6 +110,12 @@ function TickManager.RegisterInstance(instance)
 	TickManager.Start()
 end
 
+-- Detach one player from instance routing (forfeited seat): their inputs no
+-- longer reach the match and they may queue again before cleanup.
+function TickManager.UnmapPlayer(userId)
+	TickManager._instanceByPlayer[userId] = nil
+end
+
 function TickManager.UnregisterInstance(instance)
 	local idx = table.find(TickManager._instances, instance)
 	if idx then

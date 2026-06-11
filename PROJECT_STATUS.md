@@ -2,11 +2,11 @@
 
 > Single source of truth for phase progress. Update on every implementation cycle.
 > Roadmap authority: `BEY_ARENA_PRODUCTION_PLAN.md` (approved).
-> Last update: 2026-06-10 — Phase 2 opened (director's call): persistence layer live.
+> Last update: 2026-06-10 — Phase 2 engineering COMPLETE; V-gates + H-gates pending.
 
 ## Phase
 
-**Phase 2 — Competitive Gameplay: foundations IN PROGRESS.**
+**Phase 2 — Competitive Gameplay: engineering COMPLETE, live validation (V1–V6) pending.**
 
 Phase 2 was opened by director instruction with Phase 1 human gates (H1–H5)
 still pending. This is sound for the current work because the persistence layer
@@ -24,7 +24,8 @@ for ranked**: no ranked queue goes live before they pass (`VALIDATION_RUNBOOK.md
 | Launch-quality system (timing bar → Poor/Good/Perfect ≤ `LaunchBonusCap`) | ✅ done — shared synced-clock bar math (`LaunchQuality.lua`), server-graded, late-launch exploit retired; suite GREEN (draws 6.7%→3.6%) |
 | Matchmaking (queues → arena slots), ranked/casual split | ✅ done — `Matchmaking/`; MMR-proximity pairing with widening tolerance; cross-server (MemoryStore) isolated behind the same interface, deferred until multi-server population |
 | MMR + rating updates + rank display | ✅ done — Elo with placement K, convergence PROVEN headless (ρ 0.94 @ 60 matches); ranked results update profiles; rank/queue UI live |
-| Reconnect handling | ⬜ |
+| Reconnect + abandonment | ✅ done — 20 s disconnect grace (resume on return), forfeit on expiry, countdown-leave cancels, leaver's rating loss delivered via pending-adjustment queue |
+| Phase 2 validation (V1–V6 live gates) | ⬜ pending — `VALIDATION_RUNBOOK.md` Phase 2 section |
 
 ## Gate board
 
@@ -79,10 +80,9 @@ stability→spin coupling (new, kills structural draws), ring-out grace 0.33→0
 1. **Run the Phase 1 human gates** (H1–H5, `VALIDATION_RUNBOOK.md`) — 2 testers,
    ~2 h. Still open; hard release gate for ranked. Can run any time — the
    persistence work does not affect them.
-2. **Reconnect + abandonment handling** (player drops mid-ranked-match;
-   closes the leaver-dodges-rating-loss gap).
-3. **Phase 2 validation pass** (restart-survival test, concurrent-match soak,
-   live ranked loop check) before declaring Phase 2 complete.
+2. **Run the Phase 2 V-gates** (V1–V6, runbook): persistence restart-survival,
+   concurrent matches, ranked loop, reconnect, abandonment, queue edges.
+   Phase 2 engineering is COMPLETE; validation is what remains.
 
 ## Known issues / debt (tracked, not blocking Phase 1)
 
@@ -90,8 +90,8 @@ stability→spin coupling (new, kills structural draws), ring-out grace 0.33→0
   Poor (−8%), which cancels the decay edge.
 - Commands issuable while unlaunched (during Active) — harmless; revisit with
   matchmaking UX.
-- Ranked leaver dodges rating loss (profile released before finish) — owned by
-  the reconnect/abandonment cycle, flagged in MatchmakingService header.
+- ~~Ranked leaver dodges rating loss~~ — CLOSED: rating math runs on the
+  start-of-match snapshot and lands via the pending-adjustment queue.
 - `SoundId = ""` placeholders (collision/spin-down audio silent) — Phase 7 scope.
 - Command colours red/green are a colourblind risk — Phase 7 accessibility pass.
 - Replay buffer is in-memory, `Vector3` not serialized — Phase 5 scope (existing TODO).

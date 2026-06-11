@@ -64,6 +64,10 @@ else
         -- schema), the player is kicked rather than played without saves.
         -- On success: push their rank summary and drop them into the casual
         -- queue (the familiar join-and-play flow; ranked is opt-in via UI).
+        -- Reconnect first: a player returning within the disconnect grace
+        -- resumes their live match seat instead of re-entering the queue.
+        local resumedMatch = MatchManager.HandlePlayerReturned(player.UserId)
+
         task.spawn(function()
             local profile, failReason = ProfileStore.LoadProfile(player.UserId)
             if not profile then
@@ -72,7 +76,9 @@ else
                 return
             end
             MatchmakingService.PushProfileSummary(player.UserId)
-            MatchmakingService.JoinQueue(player.UserId, "Casual")
+            if not resumedMatch then
+                MatchmakingService.JoinQueue(player.UserId, "Casual")
+            end
         end)
     end)
 
@@ -88,6 +94,8 @@ end
 
 Players.PlayerRemoving:Connect(function(player)
     -- Queue removal is handled inside MatchmakingService.
+    -- Mid-match leave: disconnect grace (resume on return, forfeit on expiry).
+    MatchManager.HandlePlayerLeft(player.UserId)
     -- Save + release the session lock so the player's next server can load.
     task.spawn(function()
         ProfileStore.ReleaseProfile(player.UserId)

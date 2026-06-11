@@ -338,6 +338,112 @@ function MatchManager.CleanupMatch(instance)
 	end
 end
 
+-- ── Disconnect handling: grace → reconnect or forfeit (plan §Phase 2) ────────
+
+local _disconnectTimers = {} -- userId -> thread (pending forfeit)
+
+local function forfeitPlayer(instance, userId)
+	local state = instance.state
+	if state.phase ~= "Active" then
+		return
+	end
+	local bState = state.beyStates[userId]
+	if not bState or bState.zoneState == "Finished" then
+		return
+	end
+
+	bState.zoneState = "Finished"
+	bState.finishReason = "Forfeit"
+	bState.velocity = Vector3.new(0, 0, 0)
+	bState.angularVelocity = Vector3.new(0, 0, 0)
+	table.insert(state.tickEvents, {
+		eventType = "BeyFinished",
+		eventData = { playerId = userId, reason = "Forfeit" },
+	})
+	-- Seat is gone: inputs stop routing and the player may queue again
+	TickManager.UnmapPlayer(userId)
+	print(string.format("[Match] Player %d forfeited %s (disconnect grace expired)", userId, state.matchId))
+	-- SpinEvaluator declares the survivor the winner on the next Evaluation tick
+end
+
+local function cancelCountdownMatch(instance, leaverId)
+	local state = instance.state
+	print(string.format("[Match] %s cancelled (player %d left during countdown)", state.matchId, leaverId))
+
+	state.phase = "Finished"
+	instance:BroadcastPhase({ cancelled = true })
+
+	local remaining = {}
+	for _, pid in ipairs(state.playerOrder) do
+		if pid ~= leaverId and Players:GetPlayerByUserId(pid) then
+			table.insert(remaining, pid)
+		end
+	end
+
+	if _onReadyForRematch then
+		_onReadyForRematch(remaining, state)
+	end
+	MatchManager.CleanupMatch(instance)
+end
+
+-- Call on PlayerRemoving. Active match → grace timer (return = resume,
+-- expiry = forfeit). Countdown → cancel outright and requeue the remainder.
+function MatchManager.HandlePlayerLeft(userId)
+	local instance = TickManager.GetInstanceForPlayer(userId)
+	if not instance then
+		return
+	end
+
+	local state = instance.state
+	if state.phase == "Countdown" then
+		cancelCountdownMatch(instance, userId)
+		return
+	end
+	if state.phase ~= "Active" then
+		return
+	end
+
+	print(string.format("[Match] Player %d disconnected from %s — %ds grace",
+		userId, state.matchId, Constants.ReconnectGraceSeconds))
+	_disconnectTimers[userId] = task.delay(Constants.ReconnectGraceSeconds, function()
+		_disconnectTimers[userId] = nil
+		-- Still gone, match still live?
+		if Players:GetPlayerByUserId(userId) then
+			return
+		end
+		if TickManager.GetInstanceForPlayer(userId) == instance and state.phase == "Active" then
+			forfeitPlayer(instance, userId)
+		end
+	end)
+end
+
+-- Call on PlayerAdded. Returns true if the player resumed a live match seat
+-- (callers must then SKIP auto-queueing them).
+function MatchManager.HandlePlayerReturned(userId): boolean
+	local timer = _disconnectTimers[userId]
+	if timer then
+		task.cancel(timer)
+		_disconnectTimers[userId] = nil
+	end
+
+	local instance = TickManager.GetInstanceForPlayer(userId)
+	if not instance then
+		return false
+	end
+
+	local state = instance.state
+	local bState = state.beyStates[userId]
+	if state.phase == "Finished" or not bState or bState.zoneState == "Finished" then
+		-- Nothing to resume (match over or seat already forfeited)
+		TickManager.UnmapPlayer(userId)
+		return false
+	end
+
+	print(string.format("[Match] Player %d reconnected to %s — resyncing", userId, state.matchId))
+	instance:ResyncPlayer(userId)
+	return true
+end
+
 TickManager.SetInstanceFinishedCallback(function(instance)
 	local finishedState = instance.state
 
