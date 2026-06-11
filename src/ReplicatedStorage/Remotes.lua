@@ -48,12 +48,16 @@ local Remotes = {
 	-- Client to Server
 	RequestLaunch   = getOrCreateRemote("RequestLaunch"),
 	RequestCommand  = getOrCreateRemote("RequestCommand"),
+	RequestQueue    = getOrCreateRemote("RequestQueue"),
 
 	-- Server to Client
 	MatchStateChanged   = getOrCreateRemote("MatchStateChanged"),
 	StateSnapshot       = getOrCreateRemote("StateSnapshot"),
 	CollisionEvent      = getOrCreateRemote("CollisionEvent"),
 	UpdateDebugOverlay  = getOrCreateRemote("UpdateDebugOverlay"),
+	QueueStatus         = getOrCreateRemote("QueueStatus"),
+	ProfileSummary      = getOrCreateRemote("ProfileSummary"),
+	MmrUpdated          = getOrCreateRemote("MmrUpdated"),
 }
 
 return Remotes

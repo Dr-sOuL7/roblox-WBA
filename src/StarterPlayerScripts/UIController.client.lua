@@ -218,6 +218,98 @@ local function hideLaunchBar()
 	launchBarFrame.Visible = false
 end
 
+-- ── Queue & rank panel (Phase 2) ──────────────────────────────────────────────
+
+local queuePanel = Instance.new("Frame")
+queuePanel.Name = "QueuePanel"
+queuePanel.Size = UDim2.fromOffset(190, 96)
+queuePanel.Position = UDim2.new(1, -200, 0, 10)
+queuePanel.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+queuePanel.BackgroundTransparency = 0.25
+queuePanel.BorderSizePixel = 0
+queuePanel.Parent = screenGui
+
+local queueCorner = Instance.new("UICorner")
+queueCorner.CornerRadius = UDim.new(0, 8)
+queueCorner.Parent = queuePanel
+
+local rankLabel = Instance.new("TextLabel")
+rankLabel.Name = "RankLabel"
+rankLabel.Size = UDim2.new(1, -10, 0, 24)
+rankLabel.Position = UDim2.new(0, 5, 0, 4)
+rankLabel.BackgroundTransparency = 1
+rankLabel.Font = Enum.Font.GothamBold
+rankLabel.TextSize = 16
+rankLabel.TextColor3 = Color3.fromRGB(255, 215, 120)
+rankLabel.Text = "Rank: loading..."
+rankLabel.Parent = queuePanel
+
+local queueStateLabel = Instance.new("TextLabel")
+queueStateLabel.Name = "QueueStateLabel"
+queueStateLabel.Size = UDim2.new(1, -10, 0, 18)
+queueStateLabel.Position = UDim2.new(0, 5, 0, 28)
+queueStateLabel.BackgroundTransparency = 1
+queueStateLabel.Font = Enum.Font.Gotham
+queueStateLabel.TextSize = 13
+queueStateLabel.TextColor3 = Color3.fromRGB(200, 200, 210)
+queueStateLabel.Text = "Queue: —"
+queueStateLabel.Parent = queuePanel
+
+local function makeQueueButton(name, label, xOffset, color)
+	local btn = Instance.new("TextButton")
+	btn.Name = name
+	btn.Size = UDim2.fromOffset(85, 34)
+	btn.Position = UDim2.new(0, 5 + xOffset, 0, 52)
+	btn.BackgroundColor3 = color
+	btn.BorderSizePixel = 0
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 14
+	btn.TextColor3 = Color3.new(1, 1, 1)
+	btn.Text = label
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = btn
+	btn.Parent = queuePanel
+	return btn
+end
+
+local casualButton = makeQueueButton("CasualQueue", "CASUAL", 0, Color3.fromRGB(70, 120, 80))
+local rankedButton = makeQueueButton("RankedQueue", "RANKED", 95, Color3.fromRGB(140, 90, 50))
+
+casualButton.MouseButton1Click:Connect(function()
+	Remotes.RequestQueue:FireServer("Casual")
+end)
+rankedButton.MouseButton1Click:Connect(function()
+	Remotes.RequestQueue:FireServer("Ranked")
+end)
+
+Remotes.QueueStatus.OnClientEvent:Connect(function(status)
+	if status.state == "Queued" then
+		queueStateLabel.Text = "Queue: " .. status.mode .. " (searching...)"
+	elseif status.state == "Matched" then
+		queueStateLabel.Text = "Queue: matched! (" .. tostring(status.mode) .. ")"
+	elseif status.state == "Left" then
+		queueStateLabel.Text = "Queue: —"
+	elseif status.state == "Rejected" then
+		queueStateLabel.Text = "Queue: unavailable (" .. tostring(status.reason) .. ")"
+	end
+end)
+
+Remotes.ProfileSummary.OnClientEvent:Connect(function(summary)
+	rankLabel.Text = string.format("%s · %d MMR", summary.tier, summary.mmr)
+end)
+
+Remotes.MmrUpdated.OnClientEvent:Connect(function(update)
+	local sign = update.delta >= 0 and "+" or ""
+	rankLabel.Text = string.format("%s · %d MMR (%s%d)", update.tier, update.newMmr, sign, update.delta)
+	rankLabel.TextColor3 = update.delta >= 0
+		and Color3.fromRGB(140, 255, 140)
+		or Color3.fromRGB(255, 140, 120)
+	task.delay(4, function()
+		rankLabel.TextColor3 = Color3.fromRGB(255, 215, 120)
+	end)
+end)
+
 -- ── Match phase state ─────────────────────────────────────────────────────────
 
 local currentPhase = "None"

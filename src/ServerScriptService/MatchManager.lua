@@ -247,9 +247,12 @@ end
 
 --[=[
 	Start a match for playerIds in a free arena slot.
+	options.queueMode: "Ranked" | "Casual" (default) — stamped on the state so
+	finish listeners (rating updates) know the stakes.
 	Returns the MatchInstance, or nil if no slot is free (caller re-queues).
 ]=]
-function MatchManager.StartNewMatch(playerIds)
+function MatchManager.StartNewMatch(playerIds, options)
+	options = options or {}
 	local slot = claimFreeSlot()
 	if not slot then
 		warn("[MatchManager] No free arena slot; match not started.")
@@ -262,6 +265,7 @@ function MatchManager.StartNewMatch(playerIds)
 	local matchSeed = math.floor(workspace:GetServerTimeNow() * 1000) % (2^31 - 1)
 	local newState = MatchState.new(matchSeed)
 	newState.matchId = string.format("Match_%d_s%d", matchSeed, slot)
+	newState.queueMode = options.queueMode or "Casual"
 
 	-- Begin with an authoritative countdown
 	newState.phase = "Countdown"
@@ -354,11 +358,10 @@ TickManager.SetInstanceFinishedCallback(function(instance)
 		end
 	end
 
-	-- Queue returning players BEFORE freeing the slot: cleanup triggers the
-	-- next start round, and front-of-queue priority gives them first claim
-	-- on their own freed arena.
+	-- Requeue returning players before freeing the slot so they can claim
+	-- their own arena for the next round (matchmaking pairs them again).
 	if _onReadyForRematch then
-		_onReadyForRematch(validPlayers)
+		_onReadyForRematch(validPlayers, finishedState)
 	end
 
 	MatchManager.CleanupMatch(instance)

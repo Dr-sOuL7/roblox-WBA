@@ -37,6 +37,9 @@ MODULES = [
     # Persistence: pure modules only (ProfileStore/StatsRecorder need live Roblox services)
     ("ServerScriptService/Persistence/ProfileSchema", "src/ServerScriptService/Persistence/ProfileSchema.lua"),
     ("ServerScriptService/Persistence/ProfileLogic", "src/ServerScriptService/Persistence/ProfileLogic.lua"),
+    # Matchmaking: pure modules only (MatchmakingService needs live Roblox services)
+    ("ServerScriptService/Matchmaking/MmrLogic", "src/ServerScriptService/Matchmaking/MmrLogic.lua"),
+    ("ServerScriptService/Matchmaking/MatchQueue", "src/ServerScriptService/Matchmaking/MatchQueue.lua"),
 ]
 
 

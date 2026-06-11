@@ -201,7 +201,150 @@ elseif mode == "persistence" then
 		expect(stats.wins == 1)
 	end)
 
-	finishTests("Persistence logic tests")
+	local MmrLogic = require(__tokens["ServerScriptService/Matchmaking/MmrLogic"])
+	local MatchQueue = require(__tokens["ServerScriptService/Matchmaking/MatchQueue"])
+
+	print("──────── MMR logic tests ────────")
+
+	test("elo: expected scores are complementary", function()
+		expect(math.abs(MmrLogic.expectedScore(1000, 1000) - 0.5) < 1e-9)
+		local e1 = MmrLogic.expectedScore(1200, 1000)
+		local e2 = MmrLogic.expectedScore(1000, 1200)
+		expect(math.abs((e1 + e2) - 1) < 1e-9)
+		expect(e1 > 0.7, "200-point favourite should be > 70%")
+	end)
+	test("elo: equal-K updates are zero-sum", function()
+		local a, b = MmrLogic.updateRatings(1100, 1000, 1, 32, 32)
+		expect(a > 1100 and b < 1000)
+		expect((a - 1100) + (b - 1000) == 0, "gain must equal loss")
+	end)
+	test("elo: draw moves unequal ratings together", function()
+		local a, b = MmrLogic.updateRatings(1200, 1000, 0.5, 32, 32)
+		expect(a < 1200 and b > 1000)
+	end)
+	test("elo: rating floor holds", function()
+		local _, b = MmrLogic.updateRatings(2000, 105, 1, 32, 32)
+		expect(b >= MmrLogic.RATING_FLOOR)
+	end)
+	test("k-factor: placement boundary", function()
+		expect(MmrLogic.kFor(MmrLogic.PLACEMENT_MATCHES - 1) == MmrLogic.K_PLACEMENT)
+		expect(MmrLogic.kFor(MmrLogic.PLACEMENT_MATCHES) == MmrLogic.K_STANDARD)
+	end)
+	test("tiers: boundaries map correctly", function()
+		expect(MmrLogic.tierFor(899) == "Bronze")
+		expect(MmrLogic.tierFor(900) == "Silver")
+		expect(MmrLogic.tierFor(1100) == "Gold")
+		expect(MmrLogic.tierFor(1500) == "Diamond")
+	end)
+
+	print("──────── Match queue tests ────────")
+
+	test("queue: join/dup/leave/size", function()
+		local q = MatchQueue.new("Ranked")
+		expect(q:join(1, 1000, 0))
+		expect(not q:join(1, 1000, 0), "duplicate join must fail")
+		expect(q:contains(1) and q:size() == 1)
+		expect(q:leave(1) and q:size() == 0)
+		expect(not q:leave(1), "double leave must fail")
+	end)
+	test("queue: close MMRs pair immediately, far ones wait", function()
+		local q = MatchQueue.new("Ranked")
+		q:join(1, 1000, 0)
+		q:join(2, 1010, 0)
+		q:join(3, 1700, 0)
+		local pairs1 = q:tick(0)
+		expect(#pairs1 == 1, "expected exactly one pair")
+		local matched = { [pairs1[1].a.userId] = true, [pairs1[1].b.userId] = true }
+		expect(matched[1] and matched[2], "the close pair should match")
+		expect(q:contains(3), "outlier stays queued")
+	end)
+	test("queue: tolerance widens with wait time", function()
+		local q = MatchQueue.new("Ranked", { baseTolerance = 100, toleranceGrowthPerSecond = 5, toleranceMax = 500 })
+		q:join(1, 1000, 0)
+		q:join(2, 1300, 0)
+		expect(#q:tick(0) == 0, "300 gap must not pair at t0")
+		expect(#q:tick(45) == 1, "tolerance 325 at t45 covers the 300 gap")
+	end)
+	test("queue: tolerance cap is a hard wall", function()
+		local q = MatchQueue.new("Ranked", { baseTolerance = 100, toleranceGrowthPerSecond = 5, toleranceMax = 500 })
+		q:join(1, 1000, 0)
+		q:join(2, 1600, 0)
+		expect(#q:tick(10000) == 0, "600 gap must never pair (cap 500)")
+	end)
+	test("queue: pairs by proximity, drains evens", function()
+		local q = MatchQueue.new("Casual", { baseTolerance = 100000, toleranceGrowthPerSecond = 0, toleranceMax = 100000 })
+		q:join(1, 900, 0)
+		q:join(2, 950, 0)
+		q:join(3, 1400, 0)
+		q:join(4, 1450, 0)
+		local got = q:tick(0)
+		expect(#got == 2 and q:size() == 0)
+	end)
+
+	print("──────── MMR convergence simulation (plan: 'does it converge?') ────────")
+
+	test("convergence: rating order matches true skill (rho >= 0.85)", function()
+		-- 20 players with hidden true skills; everyone starts at 1000.
+		-- Each round pairs rating-neighbours (mirroring queue pairing) and
+		-- resolves wins probabilistically from TRUE skill. Deterministic seed.
+		local rng = Random.new(42)
+		local players = {}
+		for i = 1, 20 do
+			players[i] = { id = i, trueSkill = 800 + (i - 1) * 40, rating = MmrLogic.DEFAULT_RATING, played = 0 }
+		end
+
+		local function spearman()
+			local byRating = table.clone(players)
+			table.sort(byRating, function(x, y)
+				if x.rating ~= y.rating then return x.rating < y.rating end
+				return x.id < y.id
+			end)
+			local ratingRank = {}
+			for rank, p in ipairs(byRating) do
+				ratingRank[p.id] = rank
+			end
+			-- true-skill rank == id (skills are strictly increasing by id)
+			local sumD2 = 0
+			for _, p in ipairs(players) do
+				local d = ratingRank[p.id] - p.id
+				sumD2 += d * d
+			end
+			local n = #players
+			return 1 - (6 * sumD2) / (n * (n * n - 1))
+		end
+
+		local function playRounds(rounds)
+			for _ = 1, rounds do
+				local order = table.clone(players)
+				table.sort(order, function(x, y)
+					if x.rating ~= y.rating then return x.rating < y.rating end
+					return x.id < y.id
+				end)
+				for i = 1, #order - 1, 2 do
+					local a, b = order[i], order[i + 1]
+					local pWinA = MmrLogic.expectedScore(a.trueSkill, b.trueSkill)
+					local scoreA = (rng:NextNumber() < pWinA) and 1 or 0
+					a.rating, b.rating = MmrLogic.updateRatings(
+						a.rating, b.rating, scoreA,
+						MmrLogic.kFor(a.played), MmrLogic.kFor(b.played)
+					)
+					a.played += 1
+					b.played += 1
+				end
+			end
+		end
+
+		playRounds(5)
+		local earlyRho = spearman()
+		playRounds(55)
+		local finalRho = spearman()
+
+		print(string.format("    rho after 5 rounds: %.3f | after 60 rounds: %.3f", earlyRho, finalRho))
+		expect(finalRho >= 0.85, string.format("final rho %.3f below 0.85", finalRho))
+		expect(finalRho > earlyRho, "convergence should improve with more matches")
+	end)
+
+	finishTests("Logic tests")
 
 else
 	error("Unknown mode: " .. tostring(mode) .. " (expected 'suite', 'batch' or 'persistence')", 0)

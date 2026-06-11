@@ -22,8 +22,8 @@ for ranked**: no ranked queue goes live before they pass (`VALIDATION_RUNBOOK.md
 | Server-scaling decision | ✅ decided — multi-stadium per server, `docs/ADR-001-server-scaling.md` |
 | Multi-match refactor (`MatchInstance`, scheduler `TickManager`, slots) | ✅ done — full harness suite reproduces the Phase 1 baseline EXACTLY (zero sim drift); 4 arena slots live |
 | Launch-quality system (timing bar → Poor/Good/Perfect ≤ `LaunchBonusCap`) | ✅ done — shared synced-clock bar math (`LaunchQuality.lua`), server-graded, late-launch exploit retired; suite GREEN (draws 6.7%→3.6%) |
-| Matchmaking (MemoryStore queue), ranked/casual split | ⬜ |
-| MMR + rating updates + rank display | ⬜ |
+| Matchmaking (queues → arena slots), ranked/casual split | ✅ done — `Matchmaking/`; MMR-proximity pairing with widening tolerance; cross-server (MemoryStore) isolated behind the same interface, deferred until multi-server population |
+| MMR + rating updates + rank display | ✅ done — Elo with placement K, convergence PROVEN headless (ρ 0.94 @ 60 matches); ranked results update profiles; rank/queue UI live |
 | Reconnect handling | ⬜ |
 
 ## Gate board
@@ -79,11 +79,10 @@ stability→spin coupling (new, kills structural draws), ring-out grace 0.33→0
 1. **Run the Phase 1 human gates** (H1–H5, `VALIDATION_RUNBOOK.md`) — 2 testers,
    ~2 h. Still open; hard release gate for ranked. Can run any time — the
    persistence work does not affect them.
-2. **Matchmaking** (queue → arena slots) + MMR updates + ranked/casual split,
-   on top of the persistence layer and multi-match server.
-3. **Reconnect handling** (player drops mid-match).
-4. **Phase 2 validation pass** (MMR convergence sim, restart-survival test,
-   concurrent-match soak) before declaring Phase 2 complete.
+2. **Reconnect + abandonment handling** (player drops mid-ranked-match;
+   closes the leaver-dodges-rating-loss gap).
+3. **Phase 2 validation pass** (restart-survival test, concurrent-match soak,
+   live ranked loop check) before declaring Phase 2 complete.
 
 ## Known issues / debt (tracked, not blocking Phase 1)
 
@@ -91,6 +90,8 @@ stability→spin coupling (new, kills structural draws), ring-out grace 0.33→0
   Poor (−8%), which cancels the decay edge.
 - Commands issuable while unlaunched (during Active) — harmless; revisit with
   matchmaking UX.
+- Ranked leaver dodges rating loss (profile released before finish) — owned by
+  the reconnect/abandonment cycle, flagged in MatchmakingService header.
 - `SoundId = ""` placeholders (collision/spin-down audio silent) — Phase 7 scope.
 - Command colours red/green are a colourblind risk — Phase 7 accessibility pass.
 - Replay buffer is in-memory, `Vector3` not serialized — Phase 5 scope (existing TODO).

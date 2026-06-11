@@ -25,6 +25,7 @@ function ProfileSchema.defaults()
 		mmr = 1000,
 		rankedWins = 0,
 		rankedLosses = 0,
+		rankedDraws = 0,
 
 		-- Lifetime stats (recorded from match results)
 		stats = {
