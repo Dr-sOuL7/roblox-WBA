@@ -217,6 +217,11 @@ end
 
 local __services = {
 	ReplicatedStorage = getFolder("ReplicatedStorage"),
+	Players = {
+		GetPlayerByUserId = function(_self, _userId)
+			return nil -- headless matches have no live Player objects
+		end,
+	},
 	RunService = {
 		IsServer = function(_self)
 			return true

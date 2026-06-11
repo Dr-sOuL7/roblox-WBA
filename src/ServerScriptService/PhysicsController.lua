@@ -112,7 +112,7 @@ end
 
 function PhysicsController.OnPhysicsPhase(matchState)
 	-- Reset classifier counter once per tick (before sub-steps produce events)
-	CollisionClassifier.ResetTickCounter()
+	CollisionClassifier.ResetTickCounter(matchState)
 
 	local tickDt = 1 / Constants.SimulationTickRate
 	local subDt = tickDt / Constants.CollisionSubSteps

@@ -21,6 +21,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local MatchState = require(ReplicatedStorage:WaitForChild("MatchState"))
 local TickManager = require(script.Parent:WaitForChild("TickManager"))
+local MatchInstance = require(script.Parent:WaitForChild("MatchInstance"))
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
 
 local SimulationHarness = {}
@@ -55,9 +56,8 @@ local function pickWeightedCommand(rng, weights)
 	return COMMAND_NAMES[#COMMAND_NAMES]
 end
 
--- Called once per tick, before TickManager.Step, in playerOrder (determinism).
-local function runPolicyTick(state, policyByPlayer, commandCounts)
-	local rng = TickManager.GetRandom()
+-- Called once per tick, before StepTick, in playerOrder (determinism).
+local function runPolicyTick(state, rng, policyByPlayer, commandCounts)
 	for _, pid in ipairs(state.playerOrder) do
 		local policy = policyByPlayer[pid]
 		if not policy then continue end
@@ -148,11 +148,11 @@ function SimulationHarness.RunBatch(numMatches: number, options)
 		state.phase = "Active"
 		state.isHeadless = true -- suppresses per-finish console prints in hot paths
 
-		-- Build playerOrder before SetMatchState so RNG is seeded first
 		state.playerOrder = { p1Id, p2Id } -- already sorted ascending
 
-		TickManager.SetMatchState(state)
-		local rng = TickManager.GetRandom()
+		-- Same stepping container the live server uses — no headless fork
+		local inst = MatchInstance.fromState(state)
+		local rng = inst.rng
 
 		-- Spawn mirrors MatchManager: side ±10, then either a launch (the live
 		-- common case — applied on the first Active tick) or pure spawn drift.
@@ -195,8 +195,8 @@ function SimulationHarness.RunBatch(numMatches: number, options)
 		local matchCollisions = 0
 
 		while state.phase ~= "Finished" do
-			runPolicyTick(state, policyByPlayer, commandCounts)
-			TickManager.Step(true)
+			runPolicyTick(state, rng, policyByPlayer, commandCounts)
+			inst:StepTick(true)
 
 			metrics.activeTicks += 1
 			if b1.commandTimer > 0 or b2.commandTimer > 0 then

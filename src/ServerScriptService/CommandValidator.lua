@@ -36,7 +36,7 @@ local CommandValidator = {}
 function CommandValidator.ValidateAndQueue(player, _sequenceId, command)
 	if not checkRateLimit(player.UserId) then return end
 
-	local matchState = TickManager._activeMatchState
+	local matchState = TickManager.GetMatchStateForPlayer(player.UserId)
 	if not matchState then
 		return
 	end

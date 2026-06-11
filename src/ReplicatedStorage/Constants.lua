@@ -20,6 +20,13 @@ local Constants = {
 	SpawnTangentialSpeed = 15,
 	SpawnInwardSpeed = 5,
 
+	-- ── Multi-match server (ADR-001) ──────────────────────────────────────────
+	-- One server simulates several concurrent matches. Each match gets an
+	-- arena slot; physics runs in local bowl-space and rendering offsets by
+	-- the slot's world origin, so simulation math is identical in every slot.
+	MaxConcurrentMatches = 4,
+	ArenaSlotSpacing = 200,     -- studs between stadium origins on X
+
 	-- ── Arena geometry (single source of truth) ───────────────────────────────
 	-- R=50 sphere subtracted from a block gives the curvy bowl floor.
 	-- MAX_R=20 is the XZ playable radius before ring-out triggers.

@@ -1,7 +1,14 @@
 --[=[
 	TickManager.lua
-	Enforces deterministic simulation updates.
-	Includes drift protection and simulation lifecycle ownership.
+	Fixed-step scheduler for concurrent MatchInstances (ADR-001).
+
+	Owns: the phase-handler registry, the heartbeat accumulator that steps every
+	active instance at SimulationTickRate, player→instance routing, and the
+	pcall isolation + error counting around phase handlers.
+
+	Per-match state (MatchState, RNG, replication cadence) lives in
+	MatchInstance. Handlers keep their signature `fn(matchState)` — the
+	per-match RNG is reached via GetRandom(), scoped to the stepping instance.
 ]=]
 
 local RunService = game:GetService("RunService")
@@ -9,9 +16,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
 
 local TickManager = {
-	_activeMatchState = nil,
-	_randomGenerator = nil, -- Deterministic per-match RNG
-
 	_phases = {
 		Input = {},
 		Physics = {},
@@ -22,16 +26,18 @@ local TickManager = {
 		Replication = {},
 	},
 
+	_instances = {},        -- array of active MatchInstance (registration order)
+	_instanceByPlayer = {}, -- userId -> MatchInstance
+	_currentInstance = nil, -- set by MatchInstance:StepTick for handler RNG access
+
 	_accumulator = 0,
 	_tickDuration = 1 / Constants.SimulationTickRate,
 	_connection = nil,
-	_onMatchFinishedCallback = nil,
-
-	-- Replication fires every N sim ticks so snapshot rate stays at ReplicationTickRate Hz
-	-- regardless of SimulationTickRate. At 30 sim / 15 rep = every 2nd tick.
-	_replicationTickInterval = math.max(1, math.floor(Constants.SimulationTickRate / Constants.ReplicationTickRate)),
-	_replicationTickCounter = 0,
+	_onInstanceFinished = nil,
+	_phaseErrorCount = 0,
 }
+
+-- ── Handler registry ──────────────────────────────────────────────────────────
 
 function TickManager.RegisterHandler(phaseName: string, handlerFn: (any) -> ())
 	if TickManager._phases[phaseName] then
@@ -39,30 +45,15 @@ function TickManager.RegisterHandler(phaseName: string, handlerFn: (any) -> ())
 	end
 end
 
-function TickManager.SetMatchState(matchState)
-	TickManager._activeMatchState = matchState
-	TickManager._randomGenerator = Random.new(matchState.matchSeed)
-end
-
-function TickManager.SetMatchFinishedCallback(callback)
-	TickManager._onMatchFinishedCallback = callback
-end
-
-function TickManager.GetRandom()
-	return TickManager._randomGenerator
-end
-
 -- Phase errors are swallowed by pcall isolation; the harness stability gate
 -- needs them counted, not just warned.
-TickManager._phaseErrorCount = 0
-
 function TickManager.GetAndResetPhaseErrorCount(): number
 	local count = TickManager._phaseErrorCount
 	TickManager._phaseErrorCount = 0
 	return count
 end
 
-local function executePhase(phaseName: string, matchState)
+function TickManager.RunPhase(phaseName: string, matchState)
 	for _, handlerFn in ipairs(TickManager._phases[phaseName]) do
 		local success, err = pcall(handlerFn, matchState)
 		if not success then
@@ -72,91 +63,72 @@ local function executePhase(phaseName: string, matchState)
 	end
 end
 
-function TickManager.Step(isHeadless)
-	local state = TickManager._activeMatchState
-	if not state or state.phase == "Finished" then return end
+-- ── Instance routing ──────────────────────────────────────────────────────────
 
-	-- Timestamp before any phase runs so Replication snapshots carry the current server time
-	if not isHeadless then
-		state.serverTimestamp = workspace:GetServerTimeNow()
-	end
+function TickManager.SetCurrentInstance(instance)
+	TickManager._currentInstance = instance
+end
 
-	-- Clear events from the PREVIOUS tick
-	table.clear(state.tickEvents)
+-- Per-match seeded RNG of the instance currently stepping. Valid inside phase
+-- handlers (stepping is synchronous; handlers must not yield).
+function TickManager.GetRandom()
+	local instance = TickManager._currentInstance
+	return instance and instance.rng or nil
+end
 
-	if state.phase == "Countdown" then
-		-- In headless mode, we usually manually force state to Active, but if not:
-		if isHeadless or workspace:GetServerTimeNow() >= state.timers.countdownEndTime then
-			state.phase = "Active"
-			if not isHeadless then
-				print("[Match] Phase transition: Countdown -> Active")
-				local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
-				Remotes.MatchStateChanged:FireAllClients(state.phase, { matchId = state.matchId })
-			end
-			table.insert(state.tickEvents, { eventType = "MatchStarted", eventData = {} })
-		end
-		if not isHeadless then
-			TickManager._replicationTickCounter += 1
-			if TickManager._replicationTickCounter >= TickManager._replicationTickInterval then
-				TickManager._replicationTickCounter = 0
-				executePhase("Replication", state)
-			end
-		end
-	else
-		executePhase("Input", state)
-		executePhase("Physics", state)
-		executePhase("Collision", state)
-		executePhase("Clamp", state)
-		executePhase("StateUpdate", state)
-		executePhase("Evaluation", state)
-		if not isHeadless then
-			TickManager._replicationTickCounter += 1
-			if TickManager._replicationTickCounter >= TickManager._replicationTickInterval then
-				TickManager._replicationTickCounter = 0
-				executePhase("Replication", state)
-			end
-		end
-	end
+function TickManager.GetInstanceForPlayer(userId)
+	return TickManager._instanceByPlayer[userId]
+end
 
-	-- Tick cooldowns
-	for key, ticksLeft in pairs(state.collisionCooldowns) do
-		if ticksLeft > 1 then
-			state.collisionCooldowns[key] = ticksLeft - 1
-		else
-			state.collisionCooldowns[key] = nil
-		end
-	end
+function TickManager.GetMatchStateForPlayer(userId)
+	local instance = TickManager._instanceByPlayer[userId]
+	return instance and instance.state or nil
+end
 
-	state.tickNumber += 1
-	if isHeadless then
-		state.serverTimestamp = state.serverTimestamp + TickManager._tickDuration
-	end
+function TickManager.GetActiveInstances()
+	return TickManager._instances
+end
 
-	-- Lifecycle: Check if SpinEvaluator flagged the match as finished
-	if state.finishFlags.matchEnded then
-		state.phase = "Finished"
-		table.insert(state.tickEvents, {
-			eventType = "MatchFinished",
-			eventData = { winner = state.currentWinner },
-		})
-		
-		if not isHeadless then
-			print(string.format("[Match] Phase transition: Active -> Finished | Winner: %s", tostring(state.currentWinner)))
-			local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
-			Remotes.MatchStateChanged:FireAllClients(state.phase, { 
-				matchId = state.matchId, 
-				winner = state.currentWinner 
-			})
+-- ── Lifecycle ─────────────────────────────────────────────────────────────────
 
-			if TickManager._onMatchFinishedCallback then
-				task.spawn(TickManager._onMatchFinishedCallback, state)
-			end
-		end
+function TickManager.SetInstanceFinishedCallback(callback)
+	TickManager._onInstanceFinished = callback
+end
+
+-- Called by MatchInstance when its match reaches Finished (live path only)
+function TickManager.NotifyInstanceFinished(instance)
+	if TickManager._onInstanceFinished then
+		task.spawn(TickManager._onInstanceFinished, instance)
 	end
 end
 
+function TickManager.RegisterInstance(instance)
+	table.insert(TickManager._instances, instance)
+	for _, pid in ipairs(instance.state.playerOrder) do
+		TickManager._instanceByPlayer[pid] = instance
+	end
+	TickManager.Start()
+end
+
+function TickManager.UnregisterInstance(instance)
+	local idx = table.find(TickManager._instances, instance)
+	if idx then
+		table.remove(TickManager._instances, idx)
+	end
+	for pid, inst in pairs(TickManager._instanceByPlayer) do
+		if inst == instance then
+			TickManager._instanceByPlayer[pid] = nil
+		end
+	end
+	if #TickManager._instances == 0 then
+		TickManager.Stop()
+	end
+end
+
+-- ── Heartbeat stepping ────────────────────────────────────────────────────────
+
 local function onHeartbeat(dt: number)
-	if not TickManager._activeMatchState or TickManager._activeMatchState.phase == "Finished" then return end
+	if #TickManager._instances == 0 then return end
 
 	TickManager._accumulator += dt
 
@@ -168,7 +140,11 @@ local function onHeartbeat(dt: number)
 
 	while TickManager._accumulator >= TickManager._tickDuration do
 		TickManager._accumulator -= TickManager._tickDuration
-		TickManager.Step(false)
+		-- Shallow copy: an instance finishing mid-tick may unregister itself
+		local stepping = table.clone(TickManager._instances)
+		for _, instance in ipairs(stepping) do
+			instance:StepTick(false)
+		end
 	end
 end
 
@@ -183,6 +159,7 @@ function TickManager.Stop()
 	if TickManager._connection then
 		TickManager._connection:Disconnect()
 		TickManager._connection = nil
+		TickManager._accumulator = 0
 		print("[TickManager] Simulation stopped.")
 	end
 end

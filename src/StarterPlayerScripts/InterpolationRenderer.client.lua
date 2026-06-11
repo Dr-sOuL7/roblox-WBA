@@ -17,8 +17,19 @@ local SNAPSHOT_BUFFER_MAX = Constants.SnapshotBufferMax
 -- { rotation, hitstop, commandGlow (PointLight), ringOutBox (SelectionBox) }
 local beyVisuals = {}
 
+-- Multi-match (ADR-001): models live under workspace.Matches[matchId] and the
+-- simulation is local-space — rendering adds the match's arena origin.
+local currentMatchId = nil
+local arenaOrigin = Vector3.new(0, 0, 0)
+local matchFolder = nil
+
 local function getBeyModel(pid)
-	return workspace:FindFirstChild("Bey_" .. tostring(pid))
+	if not currentMatchId then return nil end
+	if not matchFolder or matchFolder.Parent == nil or matchFolder.Name ~= currentMatchId then
+		local matches = workspace:FindFirstChild("Matches")
+		matchFolder = matches and matches:FindFirstChild(currentMatchId) or nil
+	end
+	return matchFolder and matchFolder:FindFirstChild("Bey_" .. tostring(pid)) or nil
 end
 
 -- Lazily create and attach visual effect instances to the Bey model.
@@ -136,6 +147,14 @@ end
 -- ── Snapshot receive ──────────────────────────────────────────────────────────
 
 Remotes.StateSnapshot.OnClientEvent:Connect(function(snapshot)
+	-- New match: drop stale snapshots so interpolation never lerps across matches
+	if snapshot.matchId ~= currentMatchId then
+		currentMatchId = snapshot.matchId
+		arenaOrigin = snapshot.arenaOrigin or Vector3.new(0, 0, 0)
+		matchFolder = nil
+		table.clear(snapshotBuffer)
+	end
+
 	table.insert(snapshotBuffer, snapshot)
 	if #snapshotBuffer > SNAPSHOT_BUFFER_MAX then
 		table.remove(snapshotBuffer, 1)
@@ -214,7 +233,7 @@ RunService.RenderStepped:Connect(function(dt)
 
 			-- Tilt amplified 1.5x for readability — makes wobble unmistakable
 			local tiltAngle = math.rad(bState0.tilt * 1.5)
-			model:PivotTo(CFrame.new(pos) * CFrame.Angles(tiltAngle, vis.rotation, 0))
+			model:PivotTo(CFrame.new(pos + arenaOrigin) * CFrame.Angles(tiltAngle, vis.rotation, 0))
 
 			-- ── Command glow ──────────────────────────────────────────────
 			local glow = ensureCommandGlow(pid, model)

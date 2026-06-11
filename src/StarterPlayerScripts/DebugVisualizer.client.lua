@@ -100,10 +100,11 @@ local recentCollisions = {} -- { {position, severity, timeRemaining} }
 Remotes.StateSnapshot.OnClientEvent:Connect(function(snapshot)
 	if not DEBUG_ENABLED then return end
 
+	local arenaOrigin = snapshot.arenaOrigin or Vector3.new(0, 0, 0)
 	for _, ev in ipairs(snapshot.events) do
 		if ev.eventType == "Collision" then
 			table.insert(recentCollisions, {
-				position = ev.eventData.position,
+				position = ev.eventData.position + arenaOrigin, -- event positions are local-space
 				severity = ev.eventData.collisionClass,
 				timeRemaining = 0.5, -- Flash duration
 			})
@@ -151,9 +152,12 @@ RunService.RenderStepped:Connect(function(dt)
 	local snapshot = latestSnapshot
 	if not snapshot then return end
 
+	-- Simulation is local-space; world positions add the match's arena origin
+	local arenaOrigin = snapshot.arenaOrigin or Vector3.new(0, 0, 0)
+
 	for pid, bState in pairs(snapshot.beyStates) do
-		local pos = bState.position
-		if not pos then continue end
+		if not bState.position then continue end
+		local pos = bState.position + arenaOrigin
 
 		-- 1. Velocity vector (blue arrow)
 		local vel = bState.velocity
@@ -162,9 +166,9 @@ RunService.RenderStepped:Connect(function(dt)
 			drawLine(pos, velEnd, Color3.fromRGB(60, 130, 255), 0.15)
 		end
 
-		-- 2. Bowl-center influence (faint green line to origin)
-		local origin = Vector3.new(0, pos.Y, 0)
-		drawLine(pos, origin, Color3.fromRGB(40, 180, 40), 0.06)
+		-- 2. Bowl-center influence (faint green line to the bowl centre)
+		local bowlCenter = arenaOrigin + Vector3.new(0, bState.position.Y, 0)
+		drawLine(pos, bowlCenter, Color3.fromRGB(40, 180, 40), 0.06)
 
 		-- 3. Wobble direction (magenta tilt indicator from bey top)
 		local tiltRad = math.rad(bState.tilt or 0)

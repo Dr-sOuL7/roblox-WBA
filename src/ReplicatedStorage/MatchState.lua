@@ -35,6 +35,10 @@ function MatchState.new(matchSeed: number)
         inputQueue = {},   -- Validated launch inputs: { inputSequenceId, playerId, data }
         commandQueue = {}, -- Validated command inputs: { playerId, command }
         playerOrder = {},  -- Sorted array of playerIds; set by MatchManager — canonical iteration order
+
+        -- Multi-match additions (ADR-001)
+        arenaOrigin = Vector3.new(0, 0, 0), -- world offset for rendering; sim stays local-space
+        collisionSeqCounter = 0,            -- per-tick collision id sequence (was module state)
     }
 end
 

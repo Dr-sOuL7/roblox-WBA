@@ -1,44 +1,56 @@
 --[=[
 	ReplayRecorder.lua
 	Records per-tick state snapshots and a match header for replay reconstruction.
+	Buffers are keyed by matchId — concurrent matches record independently.
 
-	NOTE: Vector3 values are stored as-is for Prototype 1 in-session replay.
-	Phase 2 TODO: serialize to {x,y,z} tables for cross-session exportability.
+	NOTE: Vector3 values are stored as-is for in-session replay.
+	Phase 5 TODO: serialize to {x,y,z} tables for cross-session exportability.
 ]=]
 local TickManager = require(script.Parent:WaitForChild("TickManager"))
 
 local ReplayRecorder = {}
 ReplayRecorder.BUFFER_SIZE = 3600 -- 120 seconds at 30 Hz
 
-local _buffer = {}
-local _matchHeader = nil
-local _headerWritten = false
+-- matchId -> { header, headerWritten, buffer }
+local _sessions = {}
 
--- Called once per match when the first MatchStarted event is seen.
-local function writeHeader(matchState)
-	_matchHeader = {
-		matchId       = matchState.matchId,
-		matchSeed     = matchState.matchSeed,
-		playerOrder   = table.clone(matchState.playerOrder),
+local function getSession(matchId)
+	local session = _sessions[matchId]
+	if not session then
+		session = { header = nil, headerWritten = false, buffer = {} }
+		_sessions[matchId] = session
+	end
+	return session
+end
+
+local function writeHeader(session, matchState)
+	session.header = {
+		matchId        = matchState.matchId,
+		matchSeed      = matchState.matchSeed,
+		playerOrder    = table.clone(matchState.playerOrder),
 		startTimestamp = matchState.serverTimestamp,
 	}
-	_headerWritten = true
+	session.headerWritten = true
 end
 
-function ReplayRecorder.GetHeader()
-	return _matchHeader
+function ReplayRecorder.GetHeader(matchId)
+	local session = _sessions[matchId]
+	return session and session.header or nil
 end
 
-function ReplayRecorder.GetBuffer()
-	return _buffer
+function ReplayRecorder.GetBuffer(matchId)
+	local session = _sessions[matchId]
+	return session and session.buffer or nil
 end
 
 function ReplayRecorder.OnReplicationPhase(matchState)
+	local session = getSession(matchState.matchId)
+
 	-- Write header on the first tick of an active match
-	if not _headerWritten then
+	if not session.headerWritten then
 		for _, ev in ipairs(matchState.tickEvents) do
 			if ev.eventType == "MatchStarted" then
-				writeHeader(matchState)
+				writeHeader(session, matchState)
 				break
 			end
 		end
@@ -61,29 +73,27 @@ function ReplayRecorder.OnReplicationPhase(matchState)
 	for _, pid in ipairs(matchState.playerOrder) do
 		local state = matchState.beyStates[pid]
 		snapshot.beyStates[pid] = {
-			position       = state.position,
-			velocity       = state.velocity,
+			position        = state.position,
+			velocity        = state.velocity,
 			angularVelocity = state.angularVelocity,
-			tilt           = state.tilt,
-			stability      = state.stability,
-			zoneState      = state.zoneState,
-			currentCommand = state.currentCommand,
-			ringOutTimer   = state.ringOutTimer,
-			finishReason   = state.finishReason,
+			tilt            = state.tilt,
+			stability       = state.stability,
+			zoneState       = state.zoneState,
+			currentCommand  = state.currentCommand,
+			ringOutTimer    = state.ringOutTimer,
+			finishReason    = state.finishReason,
 		}
 	end
 
-	table.insert(_buffer, snapshot)
+	table.insert(session.buffer, snapshot)
 
-	if #_buffer > ReplayRecorder.BUFFER_SIZE then
-		table.remove(_buffer, 1)
+	if #session.buffer > ReplayRecorder.BUFFER_SIZE then
+		table.remove(session.buffer, 1)
 	end
 
-	-- Reset for next match when this match finishes
+	-- Drop the session when this match finishes (in-memory only for now)
 	if matchState.phase == "Finished" then
-		_headerWritten = false
-		table.clear(_buffer)
-		_matchHeader = nil
+		_sessions[matchState.matchId] = nil
 	end
 end
 

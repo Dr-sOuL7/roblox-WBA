@@ -11,19 +11,41 @@ local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
 local localPlayer = Players.LocalPlayer
 local sequenceId = 0
 
+-- Multi-match (ADR-001): Bey models live under workspace.Matches[matchId] and
+-- our arena's centre is its origin, not the world origin.
+local currentMatchId = nil
+local arenaOrigin = Vector3.new(0, 0, 0)
+
+Remotes.MatchStateChanged.OnClientEvent:Connect(function(_phase, data)
+	if data and data.matchId then
+		currentMatchId = data.matchId
+	end
+	if data and data.arenaOrigin then
+		arenaOrigin = data.arenaOrigin
+	end
+end)
+
+local function findBeyModel()
+	local matches = workspace:FindFirstChild("Matches")
+	local folder = matches and currentMatchId and matches:FindFirstChild(currentMatchId)
+	return folder and folder:FindFirstChild("Bey_" .. tostring(localPlayer.UserId)) or nil
+end
+
 -- Aim the prototype launch at the bowl centre from this Bey's own spawn.
 -- A fixed world-space vector is wrong for one of the two seats: from the
 -- +X spawn it points outward and ring-outs the launcher immediately.
+-- The launch vector is consumed in the simulation's LOCAL space; aiming at
+-- the arena origin in world space yields exactly that local-space direction.
 local function computeLaunchVector(): Vector3
 	local fallback = Vector3.new(0, 0, -Constants.PrototypeLaunchSpeed)
 
-	local beyModel = workspace:FindFirstChild("Bey_" .. tostring(localPlayer.UserId))
+	local beyModel = findBeyModel()
 	if not beyModel or not beyModel.PrimaryPart then
 		return fallback
 	end
 
-	local pos = beyModel.PrimaryPart.Position
-	local toCenter = Vector3.new(-pos.X, 0, -pos.Z)
+	local toCenter = arenaOrigin - beyModel.PrimaryPart.Position
+	toCenter = Vector3.new(toCenter.X, 0, toCenter.Z)
 	if toCenter.Magnitude < 0.5 then
 		return fallback -- already at centre; direction is arbitrary
 	end

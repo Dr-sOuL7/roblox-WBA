@@ -20,7 +20,7 @@ for ranked**: no ranked queue goes live before they pass (`VALIDATION_RUNBOOK.md
 | Persistence layer (locking, retries, autosave, BindToClose, versioned schema) | ✅ built — `Persistence/`; 16/16 pure-logic tests pass headless |
 | Stats recording (first real persistence consumer) | ✅ wired via `MatchManager.OnMatchFinished` |
 | Server-scaling decision | ✅ decided — multi-stadium per server, `docs/ADR-001-server-scaling.md` |
-| Multi-match refactor (`MatchInstance`, per-match TickManager) | ⬜ next cycle |
+| Multi-match refactor (`MatchInstance`, scheduler `TickManager`, slots) | ✅ done — full harness suite reproduces the Phase 1 baseline EXACTLY (zero sim drift); 4 arena slots live |
 | Launch-quality system (timing bar → Poor/Good/Perfect ≤ `LaunchBonusCap`) | ⬜ |
 | Matchmaking (MemoryStore queue), ranked/casual split | ⬜ |
 | MMR + rating updates + rank display | ⬜ |
@@ -79,12 +79,11 @@ stability→spin coupling (new, kills structural draws), ring-out grace 0.33→0
 1. **Run the Phase 1 human gates** (H1–H5, `VALIDATION_RUNBOOK.md`) — 2 testers,
    ~2 h. Still open; hard release gate for ranked. Can run any time — the
    persistence work does not affect them.
-2. **Multi-match refactor** per ADR-001: `MatchInstance` (per-match state for
-   TickManager/MatchManager), namespaced workspace, matchId-filtered snapshots.
-3. **Launch-quality system** (timing bar → Poor/Good/Perfect ≤ `LaunchBonusCap`;
+2. **Launch-quality system** (timing bar → Poor/Good/Perfect ≤ `LaunchBonusCap`;
    retires the late-launch quirk from the baseline).
-4. **Matchmaking** (MemoryStore queue) + MMR updates + ranked/casual split,
-   on top of the persistence layer.
+3. **Matchmaking** (queue → arena slots) + MMR updates + ranked/casual split,
+   on top of the persistence layer and multi-match server.
+4. **Reconnect handling** (player drops mid-match).
 
 ## Known issues / debt (tracked, not blocking Phase 1)
 

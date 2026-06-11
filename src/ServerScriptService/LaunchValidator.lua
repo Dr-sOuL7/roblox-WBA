@@ -38,9 +38,9 @@ end
 function LaunchValidator.ValidateAndQueue(player, sequenceId, launchData)
 	if not checkRateLimit(player.UserId) then return end
 
-	local matchState = TickManager._activeMatchState
+	local matchState = TickManager.GetMatchStateForPlayer(player.UserId)
 	if not matchState then
-		warn("[LaunchValidator] No active match state.")
+		warn("[LaunchValidator] No active match for player " .. player.Name)
 		return
 	end
 	if matchState.phase == "Finished" then

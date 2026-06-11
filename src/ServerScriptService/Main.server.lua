@@ -43,7 +43,6 @@ local ProfileStore = require(PersistenceFolder:WaitForChild("ProfileStore"))
 require(PersistenceFolder:WaitForChild("StatsRecorder"))
 
 local waitingPlayers = {}
-local matchInProgress = false
 
 -- HEADLESS MODE: only runs in Studio when explicitly set to true.
 -- NEVER ship with this enabled — live players will never get a match.
@@ -56,33 +55,38 @@ if HEADLESS_MODE then
     SimulationHarness.RunBatch(HEADLESS_MATCH_COUNT)
 else
     -- Party formation happens at wake time, from the live waiting list.
-    -- Scheduling per-join instead (the old approach) let the first joiner's
-    -- coroutine start a SOLO match even when a second player had arrived
-    -- during the 2-second delay, stranding them for the whole match.
+    -- Multi-stadium server (ADR-001): pairs fill free arena slots until either
+    -- runs out; the queue holds the overflow.
     local startScheduled = false
 
+    local function tryStartMatches()
+        while #waitingPlayers >= 2 and MatchManager.HasFreeSlot() do
+            local party = { table.remove(waitingPlayers, 1), table.remove(waitingPlayers, 1) }
+            if not MatchManager.StartNewMatch(party) then
+                -- Slot race lost; requeue at the front and stop
+                table.insert(waitingPlayers, 1, party[2])
+                table.insert(waitingPlayers, 1, party[1])
+                break
+            end
+        end
+
+        -- Solo debug convenience: a lone player on an otherwise idle server
+        -- gets a practice match rather than an empty lobby
+        if #waitingPlayers == 1 and MatchManager.GetActiveMatchCount() == 0 then
+            local party = { table.remove(waitingPlayers, 1) }
+            print("Server: Starting solo practice match.")
+            MatchManager.StartNewMatch(party)
+        end
+    end
+
     local function scheduleMatchStart()
-        if startScheduled or matchInProgress then return end
+        if startScheduled then return end
         startScheduled = true
         print("Server: Match start scheduled in 2 seconds...")
 
         task.delay(2, function()
             startScheduled = false
-            if matchInProgress then return end
-
-            local party = {}
-            for _ = 1, math.min(2, #waitingPlayers) do
-                table.insert(party, table.remove(waitingPlayers, 1))
-            end
-
-            if #party == 0 then
-                print("Server: All waiting players left before match start.")
-                return
-            end
-
-            print(string.format("Server: Starting match with %d player(s).", #party))
-            matchInProgress = true
-            MatchManager.StartNewMatch(party)
+            tryStartMatches()
         end)
     end
 
@@ -104,53 +108,21 @@ else
         scheduleMatchStart()
     end)
 
-    MatchManager.OnMatchCleanedUp(function()
-        matchInProgress = false
+    MatchManager.OnMatchCleanedUp(function(_instance)
+        -- A slot just freed; queued players may now fit
+        tryStartMatches()
     end)
 
-    -- After each match, merge returning players with anyone who joined mid-match.
-    -- Returning players get priority; the match is capped at 2 (this is a 1v1 —
-    -- spawn positions and steering assume at most two Beys). Overflow stays queued.
+    -- After each match, returning players rejoin the queue with priority
+    -- (front of the line) and matches fill from there — same path as joins.
     MatchManager.OnReadyForRematch(function(returningPlayers)
-        local seen = {}
-        local pool = {}
-        for _, pid in ipairs(returningPlayers) do
-            if not seen[pid] then
-                seen[pid] = true
-                table.insert(pool, pid)
+        for i = #returningPlayers, 1, -1 do
+            local pid = returningPlayers[i]
+            if not table.find(waitingPlayers, pid) then
+                table.insert(waitingPlayers, 1, pid)
             end
         end
-        for _, pid in ipairs(waitingPlayers) do
-            if not seen[pid] then
-                seen[pid] = true
-                table.insert(pool, pid)
-            end
-        end
-
-        if matchInProgress then
-            -- A scheduled lobby start won the race; requeue everyone for the next round
-            table.clear(waitingPlayers)
-            for _, pid in ipairs(pool) do
-                table.insert(waitingPlayers, pid)
-            end
-            return
-        end
-
-        local party = {}
-        for _ = 1, math.min(2, #pool) do
-            table.insert(party, table.remove(pool, 1))
-        end
-        table.clear(waitingPlayers)
-        for _, pid in ipairs(pool) do
-            table.insert(waitingPlayers, pid)
-        end
-
-        if #party > 0 then
-            matchInProgress = true
-            MatchManager.StartNewMatch(party)
-        else
-            print("Server: No players available for rematch.")
-        end
+        tryStartMatches()
     end)
 end
 

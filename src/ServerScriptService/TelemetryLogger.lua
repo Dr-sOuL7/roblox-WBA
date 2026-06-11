@@ -2,6 +2,7 @@
 	TelemetryLogger.lua
 	Collects per-match metrics and prints structured match summaries.
 	Tracks collision counts, timestamps, stability, recovery events, and emotional tags.
+	Accumulators are keyed by matchId — concurrent matches never share state.
 ]=]
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
@@ -9,36 +10,31 @@ local TickManager = require(script.Parent:WaitForChild("TickManager"))
 
 local TelemetryLogger = {}
 
--- Per-match accumulators (reset on match start)
-local telemetry = {
-	collisionCounts  = { Light = 0, Heavy = 0, Smash = 0 },
-	heavyTimestamps  = {},
-	smashTimestamps  = {},
-	recoveryEvents   = 0,
-	ringOutWarnings  = 0,
-	ringOutEscapes   = 0,
-	ringOutFinishes  = 0,
-	commandCounts    = {}, -- { [pid] = { Attack=0, Defend=0, Evade=0 } }
-	tiltAccumulators = {}, -- { [pid] = { sum=0, samples=0 } }
-	matchStartTick   = 0,
-	hasLoggedFinish  = false,
-}
+-- matchId -> accumulator table (created on first sight, dropped at match end)
+local _sessions = {}
 
-local function resetTelemetry()
-	telemetry.collisionCounts = { Light = 0, Heavy = 0, Smash = 0 }
-	telemetry.heavyTimestamps = {}
-	telemetry.smashTimestamps = {}
-	telemetry.recoveryEvents  = 0
-	telemetry.ringOutWarnings = 0
-	telemetry.ringOutEscapes  = 0
-	telemetry.ringOutFinishes = 0
-	telemetry.commandCounts   = {}
-	telemetry.tiltAccumulators = {}
-	telemetry.matchStartTick  = 0
-	telemetry.hasLoggedFinish = false
+local function getSession(matchId)
+	local session = _sessions[matchId]
+	if not session then
+		session = {
+			collisionCounts  = { Light = 0, Heavy = 0, Smash = 0 },
+			heavyTimestamps  = {},
+			smashTimestamps  = {},
+			recoveryEvents   = 0,
+			ringOutWarnings  = 0,
+			ringOutEscapes   = 0,
+			ringOutFinishes  = 0,
+			commandCounts    = {}, -- { [pid] = { Attack=0, Defend=0, Evade=0 } }
+			tiltAccumulators = {}, -- { [pid] = { sum=0, samples=0 } }
+			matchStartTick   = 0,
+			hasLoggedFinish  = false,
+		}
+		_sessions[matchId] = session
+	end
+	return session
 end
 
-local function generateEmotionalTag(matchState)
+local function generateEmotionalTag(matchState, telemetry)
 	local tags = {}
 
 	-- Close Finish: both/all beys below 25% stability at end
@@ -86,6 +82,8 @@ local function generateEmotionalTag(matchState)
 end
 
 function TelemetryLogger.OnReplicationPhase(matchState)
+	local telemetry = getSession(matchState.matchId)
+
 	-- Track start tick
 	if telemetry.matchStartTick == 0 and matchState.phase == "Active" then
 		telemetry.matchStartTick = matchState.tickNumber
@@ -168,7 +166,7 @@ function TelemetryLogger.OnReplicationPhase(matchState)
 		end
 
 		-- Emotional tag
-		local emotionalTag = generateEmotionalTag(matchState)
+		local emotionalTag = generateEmotionalTag(matchState, telemetry)
 
 		-- Print structured report
 		print("═══════════════════════════════════════════")
@@ -219,8 +217,8 @@ function TelemetryLogger.OnReplicationPhase(matchState)
 		print(string.format(" Emotional:    [%s]", emotionalTag))
 		print("═══════════════════════════════════════════")
 
-		-- Reset for next match
-		resetTelemetry()
+		-- Drop this match's session
+		_sessions[matchState.matchId] = nil
 	end
 end
 

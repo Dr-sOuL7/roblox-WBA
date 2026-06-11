@@ -13,6 +13,7 @@ local StarterGui = game:GetService("StarterGui")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
+local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
 
 -- Frame the bowl from a 45° isometric angle, scaled to the playable radius so
 -- Phase 3 stadium variants stay framed without touching this script.
@@ -21,12 +22,21 @@ local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
 local CAMERA_HEIGHT_FACTOR = 1.5
 local CAMERA_DISTANCE_FACTOR = 1.5
 
-local eyePosition = Vector3.new(
+local eyeOffset = Vector3.new(
 	0,
 	Constants.BowlPlayableRadius * CAMERA_HEIGHT_FACTOR,
 	Constants.BowlPlayableRadius * CAMERA_DISTANCE_FACTOR
 )
-local lookTarget = Vector3.new(0, 0, 0)
+
+-- Multi-match (ADR-001): the server assigns this client's match an arena
+-- origin; the camera frames THAT bowl. Defaults to slot 1 until assigned.
+local arenaOrigin = Vector3.new(0, 0, 0)
+
+Remotes.MatchStateChanged.OnClientEvent:Connect(function(_phase, data)
+	if data and data.arenaOrigin then
+		arenaOrigin = data.arenaOrigin
+	end
+end)
 
 local function enforceCameraLock()
 	local camera = workspace.CurrentCamera
@@ -35,7 +45,7 @@ local function enforceCameraLock()
 	if camera.CameraType ~= Enum.CameraType.Scriptable then
 		camera.CameraType = Enum.CameraType.Scriptable
 	end
-	camera.CFrame = CFrame.lookAt(eyePosition, lookTarget)
+	camera.CFrame = CFrame.lookAt(arenaOrigin + eyeOffset, arenaOrigin)
 end
 
 enforceCameraLock()
