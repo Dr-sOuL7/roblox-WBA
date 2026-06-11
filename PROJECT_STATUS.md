@@ -21,7 +21,7 @@ for ranked**: no ranked queue goes live before they pass (`VALIDATION_RUNBOOK.md
 | Stats recording (first real persistence consumer) | ✅ wired via `MatchManager.OnMatchFinished` |
 | Server-scaling decision | ✅ decided — multi-stadium per server, `docs/ADR-001-server-scaling.md` |
 | Multi-match refactor (`MatchInstance`, scheduler `TickManager`, slots) | ✅ done — full harness suite reproduces the Phase 1 baseline EXACTLY (zero sim drift); 4 arena slots live |
-| Launch-quality system (timing bar → Poor/Good/Perfect ≤ `LaunchBonusCap`) | ⬜ |
+| Launch-quality system (timing bar → Poor/Good/Perfect ≤ `LaunchBonusCap`) | ✅ done — shared synced-clock bar math (`LaunchQuality.lua`), server-graded, late-launch exploit retired; suite GREEN (draws 6.7%→3.6%) |
 | Matchmaking (MemoryStore queue), ranked/casual split | ⬜ |
 | MMR + rating updates + rank display | ⬜ |
 | Reconnect handling | ⬜ |
@@ -79,16 +79,18 @@ stability→spin coupling (new, kills structural draws), ring-out grace 0.33→0
 1. **Run the Phase 1 human gates** (H1–H5, `VALIDATION_RUNBOOK.md`) — 2 testers,
    ~2 h. Still open; hard release gate for ranked. Can run any time — the
    persistence work does not affect them.
-2. **Launch-quality system** (timing bar → Poor/Good/Perfect ≤ `LaunchBonusCap`;
-   retires the late-launch quirk from the baseline).
-3. **Matchmaking** (queue → arena slots) + MMR updates + ranked/casual split,
+2. **Matchmaking** (queue → arena slots) + MMR updates + ranked/casual split,
    on top of the persistence layer and multi-match server.
-4. **Reconnect handling** (player drops mid-match).
+3. **Reconnect handling** (player drops mid-match).
+4. **Phase 2 validation pass** (MMR convergence sim, restart-survival test,
+   concurrent-match soak) before declaring Phase 2 complete.
 
 ## Known issues / debt (tracked, not blocking Phase 1)
 
-- Late-launch spin advantage (~5%/0.5 s) — folded into Phase 2 launch redesign.
-- Commands issuable pre-launch — same owner.
+- ~~Late-launch spin advantage~~ — RETIRED: launches after the window grade
+  Poor (−8%), which cancels the decay edge.
+- Commands issuable while unlaunched (during Active) — harmless; revisit with
+  matchmaking UX.
 - `SoundId = ""` placeholders (collision/spin-down audio silent) — Phase 7 scope.
 - Command colours red/green are a colourblind risk — Phase 7 accessibility pass.
 - Replay buffer is in-memory, `Vector3` not serialized — Phase 5 scope (existing TODO).

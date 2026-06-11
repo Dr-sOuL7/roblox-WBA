@@ -20,9 +20,30 @@
 ]=]
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local MatchState = require(ReplicatedStorage:WaitForChild("MatchState"))
+local LaunchQuality = require(ReplicatedStorage:WaitForChild("LaunchQuality"))
 local TickManager = require(script.Parent:WaitForChild("TickManager"))
 local MatchInstance = require(script.Parent:WaitForChild("MatchInstance"))
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
+
+-- Human-ish timing-bar outcome mix for launched matches (tuning model, not a
+-- target): casual players land mostly Good with occasional Perfect/Poor.
+local QUALITY_MIX = {
+	{ quality = "Perfect", weight = 0.20 },
+	{ quality = "Good",    weight = 0.50 },
+	{ quality = "Poor",    weight = 0.30 },
+}
+
+local function drawLaunchQuality(rng)
+	local roll = rng:NextNumber()
+	local cumulative = 0
+	for _, entry in ipairs(QUALITY_MIX) do
+		cumulative += entry.weight
+		if roll <= cumulative then
+			return entry.quality
+		end
+	end
+	return "Good"
+end
 
 local SimulationHarness = {}
 
@@ -128,6 +149,7 @@ function SimulationHarness.RunBatch(numMatches: number, options)
 		activeTicks      = 0,  -- total simulated ticks (uptime denominator)
 		commandTotals    = { Attack = 0, Defend = 0, Evade = 0 },
 		severityCounts   = { Light = 0, Heavy = 0, Smash = 0 },
+		launchQualities  = { Perfect = 0, Good = 0, Poor = 0 },
 	}
 
 	local p1Id = 101
@@ -156,7 +178,7 @@ function SimulationHarness.RunBatch(numMatches: number, options)
 
 		-- Spawn mirrors MatchManager: side ±10, then either a launch (the live
 		-- common case — applied on the first Active tick) or pure spawn drift.
-		-- RNG draws happen in fixed order (b1 speed, b1 angle, b2 speed, b2 angle)
+		-- RNG draws happen in fixed order (per bey: speed, angle, quality)
 		-- so batches stay deterministic.
 		local function setupBey(pid, side)
 			local b = MatchState.createBeyState(pid)
@@ -164,10 +186,17 @@ function SimulationHarness.RunBatch(numMatches: number, options)
 			if launchMode == "Launched" then
 				local speed = Constants.PrototypeLaunchSpeed * rng:NextNumber(0.9, 1.1)
 				local jitter = rng:NextNumber(-0.15, 0.15) -- radians around the centre aim
+				-- Timing-bar quality scales speed AND spin, exactly as the
+				-- LaunchValidator applies it live
+				local quality = drawLaunchQuality(rng)
+				local multiplier = LaunchQuality.multiplierFor(quality)
+				b.launchQuality = quality
+				metrics.launchQualities[quality] += 1
+				speed *= multiplier
 				local dx = -side -- unit direction toward centre
 				local cosJ, sinJ = math.cos(jitter), math.sin(jitter)
 				b.velocity = Vector3.new(dx * cosJ * speed, 0, -dx * sinJ * speed)
-				b.angularVelocity = Vector3.new(0, Constants.PrototypeLaunchSpin, 0)
+				b.angularVelocity = Vector3.new(0, Constants.PrototypeLaunchSpin * multiplier, 0)
 			else -- "Idle": never launched, spawn drift only
 				b.velocity = Vector3.new(
 					-side * Constants.SpawnInwardSpeed,
@@ -306,6 +335,10 @@ function SimulationHarness.PrintReport(m)
 	print(string.format("Longest Match:      %.2fs", m.longestSeconds))
 	print(string.format("Avg Collisions:     %.1f per match (Light=%d Heavy=%d Smash=%d)",
 		m.avgCollisions, m.severityCounts.Light, m.severityCounts.Heavy, m.severityCounts.Smash))
+	if m.launchMode == "Launched" then
+		print(string.format("Launch Qualities:   Perfect=%d Good=%d Poor=%d",
+			m.launchQualities.Perfect, m.launchQualities.Good, m.launchQualities.Poor))
+	end
 	print(string.format("Forced Stops:       %d | Phase Errors: %d", m.forcedStops, m.phaseErrors))
 	print("--------------------------------------------------")
 	print(string.format("Draw Rate:          %.1f%%", m.drawRate * 100))

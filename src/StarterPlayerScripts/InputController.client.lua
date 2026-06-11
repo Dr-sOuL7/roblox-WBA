@@ -64,6 +64,9 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		local launchData = {
 			launchVector = computeLaunchVector(),
 			spinPower = Constants.PrototypeLaunchSpin,
+			-- Synced-clock press time: the server grades the timing bar with
+			-- this after bounding its skew (see LaunchValidator)
+			claimedServerTime = workspace:GetServerTimeNow(),
 		}
 
 		Remotes.RequestLaunch:FireServer(sequenceId, launchData)

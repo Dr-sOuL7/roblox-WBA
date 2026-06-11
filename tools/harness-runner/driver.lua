@@ -71,6 +71,39 @@ if mode == "suite" or mode == "batch" then
 elseif mode == "persistence" then
 	local ProfileLogic = require(__tokens["ServerScriptService/Persistence/ProfileLogic"])
 	local ProfileSchema = require(__tokens["ServerScriptService/Persistence/ProfileSchema"])
+	local LaunchQuality = require(__tokens["ReplicatedStorage/LaunchQuality"])
+	local Constants = require(__tokens["ReplicatedStorage/Constants"])
+
+	print("──────── Launch quality tests ────────")
+
+	test("bar: triangle sweep 0 -> 1 -> 0", function()
+		local period = Constants.LaunchBarPeriod
+		local function near(a, b)
+			return math.abs(a - b) < 1e-9
+		end
+		expect(near(LaunchQuality.barPosition(0, 0), 0))
+		expect(near(LaunchQuality.barPosition(period / 4, 0), 0.5))
+		expect(near(LaunchQuality.barPosition(period / 2, 0), 1))
+		expect(near(LaunchQuality.barPosition(3 * period / 4, 0), 0.5))
+		expect(near(LaunchQuality.barPosition(period, 0), 0))
+	end)
+	test("grade: centre is Perfect, bands are ordered", function()
+		local period = Constants.LaunchBarPeriod
+		expect(LaunchQuality.gradeAt(period / 4, 0) == "Perfect")
+		-- position 0.5 + LaunchGoodZone - small epsilon -> Good
+		local goodTime = (0.5 + Constants.LaunchGoodZone - 0.01) * (period / 2)
+		expect(LaunchQuality.gradeAt(goodTime, 0) == "Good", "got " .. LaunchQuality.gradeAt(goodTime, 0))
+		-- far edge -> Poor
+		expect(LaunchQuality.gradeAt(0.01, 0) == "Poor")
+	end)
+	test("bonus: every tier honours LaunchBonusCap", function()
+		for quality, bonus in pairs(LaunchQuality.BONUS) do
+			expect(math.abs(bonus) <= Constants.LaunchBonusCap,
+				quality .. " exceeds the cap")
+		end
+		expect(LaunchQuality.multiplierFor("Perfect") == 1 + Constants.LaunchBonusPerfect)
+		expect(LaunchQuality.multiplierFor("NotATier") == 1)
+	end)
 
 	print("──────── Persistence logic tests ────────")
 

@@ -7,11 +7,28 @@ local Constants = {
 	-- ── Launch ────────────────────────────────────────────────────────────────
 	LaunchBonusCap = 0.15,      -- ±15% cap on launch quality advantage
 
-	-- Prototype fixed launch (Phase 2 replaces this with the quality-tier system).
-	-- Client aims at the bowl centre from its own spawn; same numbers feed the
-	-- harness so headless matches model exactly what live testers play.
+	-- Base launch values. The timing-bar quality bonus scales BOTH speed and
+	-- spin, bounded by LaunchBonusCap. Client aims at the bowl centre from its
+	-- own spawn; same numbers feed the harness so headless matches model
+	-- exactly what live testers play.
 	PrototypeLaunchSpeed = 21,
 	PrototypeLaunchSpin = 100,
+
+	-- Launch timing bar (Phase 2 skill layer). The bar position is a pure
+	-- function of the SYNCED server clock and the match's countdown epoch —
+	-- client preview and server grading share LaunchQuality.lua, so they
+	-- cannot disagree. Zones are fractions of bar travel around the centre:
+	-- at a 1.2 s period the Perfect zone is ~144 ms of travel per pass.
+	LaunchBarPeriod = 1.2,
+	LaunchPerfectZone = 0.06,        -- |pos - 0.5| ≤ this → Perfect
+	LaunchGoodZone = 0.18,           -- |pos - 0.5| ≤ this → Good
+	LaunchBonusPerfect = 0.15,       -- == LaunchBonusCap; the ceiling
+	LaunchBonusGood = 0.07,
+	LaunchBonusPoor = -0.08,         -- also the grade for late launches:
+	                                 -- cancels the ~5% late-spin decay edge,
+	                                 -- retiring the late-launch exploit
+	LaunchWindowAfterActive = 3,     -- s after Active start; later = Poor
+	LaunchClaimSkewMax = 0.5,        -- s; max |claimed - receipt| accepted
 
 	-- Pre-launch spawn drift (server-set at spawn, overridden by the launch).
 	-- Tangential 15 + inward 5 keeps an idle Bey orbiting INSIDE the bowl:

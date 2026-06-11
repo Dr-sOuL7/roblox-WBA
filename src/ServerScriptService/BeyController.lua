@@ -16,6 +16,11 @@ function BeyController.OnInputPhase(matchState)
 		if bState then
 			bState.velocity = inputEvent.data.launchVector
 			bState.angularVelocity = Vector3.new(0, inputEvent.data.spinPower, 0)
+			bState.launchQuality = inputEvent.data.quality
+			table.insert(matchState.tickEvents, {
+				eventType = "LaunchGraded",
+				eventData = { playerId = pid, quality = inputEvent.data.quality },
+			})
 		end
 	end
 	table.clear(matchState.inputQueue)

@@ -265,7 +265,9 @@ function MatchManager.StartNewMatch(playerIds)
 
 	-- Begin with an authoritative countdown
 	newState.phase = "Countdown"
-	newState.timers.countdownEndTime = workspace:GetServerTimeNow() + 3 -- 3 second countdown
+	local now = workspace:GetServerTimeNow()
+	newState.timers.countdownEndTime = now + 3 -- 3 second countdown
+	newState.timers.launchBarEpoch = now       -- timing bar sweeps from countdown start
 
 	-- Build canonical sorted player order — all modules iterate this, never pairs()
 	local sortedIds = table.clone(playerIds)
@@ -311,6 +313,7 @@ function MatchManager.StartNewMatch(playerIds)
 		seed = newState.matchSeed,
 		players = playerIds,
 		countdownEndTime = newState.timers.countdownEndTime,
+		launchBarEpoch = newState.timers.launchBarEpoch,
 	})
 
 	return instance

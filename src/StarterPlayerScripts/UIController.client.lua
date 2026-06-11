@@ -8,6 +8,8 @@ local RunService = game:GetService("RunService")
 local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
 
+local LaunchQuality = require(ReplicatedStorage:WaitForChild("LaunchQuality"))
+
 local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui")
 
@@ -131,6 +133,91 @@ activeCommandLabel.Text = ""
 activeCommandLabel.Visible = false
 activeCommandLabel.Parent = screenGui
 
+-- ── Launch timing bar (Phase 2 skill layer) ───────────────────────────────────
+-- Renders the shared LaunchQuality bar off the synced server clock. The server
+-- grades presses with the same module — what you see is what gets judged.
+
+local launchBarFrame = Instance.new("Frame")
+launchBarFrame.Name = "LaunchBar"
+launchBarFrame.Size = UDim2.fromOffset(420, 30)
+launchBarFrame.Position = UDim2.new(0.5, -210, 1, -190)
+launchBarFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+launchBarFrame.BorderSizePixel = 0
+launchBarFrame.Visible = false
+launchBarFrame.Parent = screenGui
+
+local launchBarCorner = Instance.new("UICorner")
+launchBarCorner.CornerRadius = UDim.new(0, 6)
+launchBarCorner.Parent = launchBarFrame
+
+-- Zone bands, sized from the same Constants the server grades with
+local goodBand = Instance.new("Frame")
+goodBand.Name = "GoodZone"
+goodBand.Size = UDim2.new(Constants.LaunchGoodZone * 2, 0, 1, 0)
+goodBand.Position = UDim2.new(0.5 - Constants.LaunchGoodZone, 0, 0, 0)
+goodBand.BackgroundColor3 = Color3.fromRGB(70, 110, 70)
+goodBand.BorderSizePixel = 0
+goodBand.Parent = launchBarFrame
+
+local perfectBand = Instance.new("Frame")
+perfectBand.Name = "PerfectZone"
+perfectBand.Size = UDim2.new(Constants.LaunchPerfectZone * 2, 0, 1, 0)
+perfectBand.Position = UDim2.new(0.5 - Constants.LaunchPerfectZone, 0, 0, 0)
+perfectBand.BackgroundColor3 = Color3.fromRGB(120, 200, 90)
+perfectBand.BorderSizePixel = 0
+perfectBand.Parent = launchBarFrame
+
+local barMarker = Instance.new("Frame")
+barMarker.Name = "Marker"
+barMarker.Size = UDim2.new(0, 4, 1.4, 0)
+barMarker.AnchorPoint = Vector2.new(0.5, 0.5)
+barMarker.Position = UDim2.new(0, 0, 0.5, 0)
+barMarker.BackgroundColor3 = Color3.new(1, 1, 1)
+barMarker.BorderSizePixel = 0
+barMarker.ZIndex = 2
+barMarker.Parent = launchBarFrame
+
+local launchHint = Instance.new("TextLabel")
+launchHint.Name = "LaunchHint"
+launchHint.Size = UDim2.fromOffset(420, 22)
+launchHint.Position = UDim2.new(0.5, -210, 1, -215)
+launchHint.BackgroundTransparency = 1
+launchHint.Font = Enum.Font.GothamBold
+launchHint.TextSize = 16
+launchHint.TextColor3 = Color3.fromRGB(235, 235, 235)
+launchHint.TextStrokeTransparency = 0
+launchHint.Text = "Press F to LAUNCH — hit the centre!"
+launchHint.Visible = false
+launchHint.Parent = screenGui
+
+local GRADE_STYLES = {
+	Perfect = { text = "PERFECT LAUNCH!", color = Color3.fromRGB(120, 255, 120) },
+	Good    = { text = "Good launch",     color = Color3.fromRGB(190, 230, 120) },
+	Poor    = { text = "Poor launch...",  color = Color3.fromRGB(230, 140, 90) },
+}
+
+local launchBarEpoch = 0
+local launchBarActive = false
+local hasLaunched = false
+
+local function showLaunchGrade(quality)
+	local style = GRADE_STYLES[quality]
+	if not style then return end
+	launchHint.Text = style.text
+	launchHint.TextColor3 = style.color
+	launchHint.Visible = true
+	task.delay(1.5, function()
+		if not launchBarActive then
+			launchHint.Visible = false
+		end
+	end)
+end
+
+local function hideLaunchBar()
+	launchBarActive = false
+	launchBarFrame.Visible = false
+end
+
 -- ── Match phase state ─────────────────────────────────────────────────────────
 
 local currentPhase = "None"
@@ -139,6 +226,17 @@ local TICK_SECONDS = 1 / Constants.SimulationTickRate
 
 -- Correct client prediction from server snapshots (handles rejected commands, latency races)
 Remotes.StateSnapshot.OnClientEvent:Connect(function(snapshot)
+	-- Launch grade verdicts arrive as tick events in the snapshot stream
+	if snapshot.events then
+		for _, ev in ipairs(snapshot.events) do
+			if ev.eventType == "LaunchGraded" and ev.eventData.playerId == localPlayer.UserId then
+				hasLaunched = true
+				hideLaunchBar()
+				showLaunchGrade(ev.eventData.quality)
+			end
+		end
+	end
+
 	if currentPhase ~= "Active" then return end
 	local localState = snapshot.beyStates and snapshot.beyStates[localPlayer.UserId]
 	if not localState then return end
@@ -162,6 +260,14 @@ Remotes.MatchStateChanged.OnClientEvent:Connect(function(phase, data)
 		resultLabel.Visible = false
 		commandPanel.Visible = false
 		activeCommandLabel.Visible = false
+		-- Arm the launch bar for this match
+		launchBarEpoch = data.launchBarEpoch or 0
+		hasLaunched = false
+		launchBarActive = true
+		launchBarFrame.Visible = true
+		launchHint.Text = "Press F to LAUNCH — hit the centre!"
+		launchHint.TextColor3 = Color3.fromRGB(235, 235, 235)
+		launchHint.Visible = true
 
 	elseif phase == "Active" then
 		statusLabel.Text = "BATTLE!"
@@ -181,6 +287,8 @@ Remotes.MatchStateChanged.OnClientEvent:Connect(function(phase, data)
 		statusLabel.Text = "MATCH FINISHED"
 		commandPanel.Visible = false
 		activeCommandLabel.Visible = false
+		hideLaunchBar()
+		launchHint.Visible = false
 		resultLabel.Visible = true
 
 		local winnerId = data.winner
@@ -200,6 +308,21 @@ end)
 -- ── Per-frame update ──────────────────────────────────────────────────────────
 
 RunService.RenderStepped:Connect(function(dt)
+	-- Launch bar marker: same math the server grades with, same synced clock
+	if launchBarActive and not hasLaunched then
+		local now = workspace:GetServerTimeNow()
+		barMarker.Position = UDim2.new(LaunchQuality.barPosition(now, launchBarEpoch), 0, 0.5, 0)
+		-- Window closes shortly after Active begins; late launches grade Poor
+		if currentPhase == "Active" and countdownEndTime > 0
+			and now > countdownEndTime + Constants.LaunchWindowAfterActive then
+			hideLaunchBar()
+			launchHint.Text = "Launch window closed — late launch = Poor"
+			task.delay(2, function()
+				if not launchBarActive then launchHint.Visible = false end
+			end)
+		end
+	end
+
 	-- Countdown text
 	if currentPhase == "Countdown" then
 		local remaining = countdownEndTime - workspace:GetServerTimeNow()

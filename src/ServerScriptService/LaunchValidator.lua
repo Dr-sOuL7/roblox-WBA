@@ -1,10 +1,18 @@
 --[=[
 	LaunchValidator.lua
 	Validates and queues launch inputs from clients.
-	Enforces single-fire-per-match and basic sanity bounds.
+	Enforces single-fire-per-match, sanity bounds, and timing-bar grading.
+
+	Grading is server-authoritative off the SYNCED clock: the client claims
+	the GetServerTimeNow() it pressed at; the server bounds the claim's skew
+	against receipt time and grades with the shared LaunchQuality math. A
+	fabricated claim earns at most Perfect (+LaunchBonusCap) — the cap is the
+	anti-cheat ceiling. Launches after the post-countdown window grade Poor,
+	which retires the late-launch spin-decay exploit.
 ]=]
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
+local LaunchQuality = require(ReplicatedStorage:WaitForChild("LaunchQuality"))
 local TickManager = require(script.Parent:WaitForChild("TickManager"))
 
 -- Per-player remote rate limiting: max 1 accepted launch per match
@@ -63,6 +71,26 @@ function LaunchValidator.ValidateAndQueue(player, sequenceId, launchData)
 	local vector = launchData and launchData.launchVector or Vector3.new(0, 0, 0)
 	local power  = launchData and launchData.spinPower   or 50
 
+	-- ── Timing-bar grading ────────────────────────────────────────────────────
+	local now = workspace:GetServerTimeNow()
+	local claimed = launchData and tonumber(launchData.claimedServerTime) or now
+	-- Bound the claim: no future presses, no stale/forged timestamps
+	if claimed > now or (now - claimed) > Constants.LaunchClaimSkewMax then
+		claimed = now
+	end
+
+	local quality
+	local windowEnd = matchState.timers.countdownEndTime + Constants.LaunchWindowAfterActive
+	if claimed > windowEnd then
+		quality = "Poor" -- late launch: the window has closed
+	else
+		quality = LaunchQuality.gradeAt(claimed, matchState.timers.launchBarEpoch)
+	end
+
+	local multiplier = LaunchQuality.multiplierFor(quality)
+	vector = vector * multiplier
+	power = power * multiplier
+
 	if vector.Magnitude > Constants.VelocityClampMax then
 		vector = vector.Unit * Constants.VelocityClampMax
 	end
@@ -77,10 +105,11 @@ function LaunchValidator.ValidateAndQueue(player, sequenceId, launchData)
 		data = {
 			launchVector = vector,
 			spinPower = power,
+			quality = quality,
 		},
 	})
 
-	print(string.format("[LaunchValidator] Launch queued for %s (Seq: %d)", player.Name, sequenceId))
+	print(string.format("[LaunchValidator] Launch queued for %s (Seq: %d, Quality: %s)", player.Name, sequenceId, quality))
 end
 
 return LaunchValidator

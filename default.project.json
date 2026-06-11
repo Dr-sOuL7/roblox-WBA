@@ -23,6 +23,9 @@
       "Remotes": {
         "$path": "src/ReplicatedStorage/Remotes.lua"
       },
+      "LaunchQuality": {
+        "$path": "src/ReplicatedStorage/LaunchQuality.lua"
+      },
       "Types": {
         "$path": "src/ReplicatedStorage/Types.lua"
       }

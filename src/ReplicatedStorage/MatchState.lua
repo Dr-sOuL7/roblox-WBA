@@ -17,6 +17,7 @@ function MatchState.new(matchSeed: number)
         timers = {
             matchStart = 0,
             countdownEndTime = 0,
+            launchBarEpoch = 0, -- timing-bar start (synced server clock)
             duration = 0,
         },
         activePlayers = {},
@@ -61,6 +62,7 @@ function MatchState.createBeyState(playerId: number)
         commandTimer = 0,          -- ticks remaining on active command
         commandCooldownTimer = 0,  -- ticks until next command is allowed
         launchConsumed = false,    -- single-fire guard: only one launch per match
+        launchQuality = nil,       -- nil | "Perfect" | "Good" | "Poor" (set on launch)
         -- Ring-out state
         ringOutTimer = 0,          -- ticks spent past the rim (grace period counter)
         finishReason = nil,        -- "SpinOut" | "WobbleCollapse" | "RingOut"
