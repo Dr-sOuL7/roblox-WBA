@@ -26,6 +26,9 @@
       "LaunchQuality": {
         "$path": "src/ReplicatedStorage/LaunchQuality.lua"
       },
+      "Stadiums": {
+        "$path": "src/ReplicatedStorage/Stadiums.lua"
+      },
       "Types": {
         "$path": "src/ReplicatedStorage/Types.lua"
       }

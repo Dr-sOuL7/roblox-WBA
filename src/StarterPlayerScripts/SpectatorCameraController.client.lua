@@ -13,20 +13,24 @@ local StarterGui = game:GetService("StarterGui")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
+local Stadiums = require(ReplicatedStorage:WaitForChild("Stadiums"))
 local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
 
--- Frame the bowl from a 45° isometric angle, scaled to the playable radius so
--- Phase 3 stadium variants stay framed without touching this script.
--- At radius 20: eye (0, 30, 30) → ~42 studs from origin; default 70° FOV spans
--- ~59 studs there, comfortably containing the 46-stud stadium block.
+-- Frame the bowl from a 45° isometric angle, scaled to the match's stadium so
+-- every variant stays framed. At radius 20: eye (0, 30, 30) → ~42 studs from
+-- origin; default 70° FOV spans ~59 studs there, containing the stadium block.
 local CAMERA_HEIGHT_FACTOR = 1.5
 local CAMERA_DISTANCE_FACTOR = 1.5
 
-local eyeOffset = Vector3.new(
-	0,
-	Constants.BowlPlayableRadius * CAMERA_HEIGHT_FACTOR,
-	Constants.BowlPlayableRadius * CAMERA_DISTANCE_FACTOR
-)
+local function eyeOffsetFor(playableRadius: number): Vector3
+	return Vector3.new(
+		0,
+		playableRadius * CAMERA_HEIGHT_FACTOR,
+		playableRadius * CAMERA_DISTANCE_FACTOR
+	)
+end
+
+local eyeOffset = eyeOffsetFor(Constants.BowlPlayableRadius)
 
 -- Multi-match (ADR-001): the server assigns this client's match an arena
 -- origin; the camera frames THAT bowl. Defaults to slot 1 until assigned.
@@ -35,6 +39,9 @@ local arenaOrigin = Vector3.new(0, 0, 0)
 Remotes.MatchStateChanged.OnClientEvent:Connect(function(_phase, data)
 	if data and data.arenaOrigin then
 		arenaOrigin = data.arenaOrigin
+	end
+	if data and data.stadiumId then
+		eyeOffset = eyeOffsetFor(Stadiums.get(data.stadiumId).playableRadius)
 	end
 end)
 

@@ -41,6 +41,7 @@ function MatchInstance:BroadcastPhase(payload, onlyUserId)
 	local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
 	payload.matchId = self.state.matchId
 	payload.arenaOrigin = self.arenaOrigin
+	payload.stadiumId = self.state.stadiumId
 	for _, pid in ipairs(self.state.playerOrder) do
 		if onlyUserId and pid ~= onlyUserId then continue end
 		local player = Players:GetPlayerByUserId(pid)

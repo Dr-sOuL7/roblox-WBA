@@ -11,13 +11,14 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
 local MatchState = require(ReplicatedStorage:WaitForChild("MatchState"))
+local Stadiums = require(ReplicatedStorage:WaitForChild("Stadiums"))
 local TickManager = require(script.Parent:WaitForChild("TickManager"))
 local MatchInstance = require(script.Parent:WaitForChild("MatchInstance"))
 
 local MatchManager = {}
 
 local _slots = {} -- slotIndex -> MatchInstance | "pending" | nil
-local _stadiumTemplate = nil
+local _stadiumTemplates = {} -- stadiumId -> Model (CSG built once per stadium)
 local _matchesFolder = nil
 local _onMatchCleanedUpCallback = nil
 local _onReadyForRematch = nil
@@ -58,11 +59,13 @@ end
 
 -- ── Stadium template (CSG once, clone per match) ─────────────────────────────
 
-local function buildStadiumTemplate()
-	if _stadiumTemplate then return _stadiumTemplate end
+local function buildStadiumTemplate(stadiumDef)
+	if _stadiumTemplates[stadiumDef.id] then
+		return _stadiumTemplates[stadiumDef.id]
+	end
 
-	local R = Constants.BowlSphereRadius
-	local MAX_R = Constants.BowlPlayableRadius
+	local R = stadiumDef.bowlSphereRadius
+	local MAX_R = stadiumDef.playableRadius
 
 	-- ── Create a massive block to carve the bowl into ──────────
 	local block = Instance.new("Part")
@@ -112,12 +115,12 @@ local function buildStadiumTemplate()
 	centerMark.Color = Color3.fromRGB(255, 55, 35)
 	centerMark.Parent = template
 
-	_stadiumTemplate = template
+	_stadiumTemplates[stadiumDef.id] = template
 	return template
 end
 
-local function spawnStadium(parentFolder, origin)
-	local clone = buildStadiumTemplate():Clone()
+local function spawnStadium(stadiumDef, parentFolder, origin)
+	local clone = buildStadiumTemplate(stadiumDef):Clone()
 	clone.Name = "Stadium"
 	-- Template is built around (0,0,0); shift every part by the arena origin
 	clone:PivotTo(clone:GetPivot() + origin)
@@ -266,6 +269,9 @@ function MatchManager.StartNewMatch(playerIds, options)
 	local newState = MatchState.new(matchSeed)
 	newState.matchId = string.format("Match_%d_s%d", matchSeed, slot)
 	newState.queueMode = options.queueMode or "Casual"
+	-- Stadium: explicit pick (casual select, later) or seeded rotation (ranked)
+	newState.stadiumId = options.stadiumId or Stadiums.pickForSeed(matchSeed)
+	local stadiumDef = Stadiums.get(newState.stadiumId)
 
 	-- Begin with an authoritative countdown
 	newState.phase = "Countdown"
@@ -286,7 +292,11 @@ function MatchManager.StartNewMatch(playerIds, options)
 	folder.Name = newState.matchId
 	folder.Parent = getMatchesFolder()
 
-	spawnStadium(folder, origin) -- may yield once ever (template CSG build)
+	spawnStadium(stadiumDef, folder, origin) -- may yield once per stadium (template CSG build)
+
+	-- Mirrored spawns at half the playable radius — scales with the stadium
+	-- (Classic: ±10, identical to the validated baseline)
+	local spawnRadius = stadiumDef.playableRadius * 0.5
 
 	for i, pid in ipairs(playerIds) do
 		local bState = MatchState.createBeyState(pid)
@@ -294,7 +304,7 @@ function MatchManager.StartNewMatch(playerIds, options)
 		-- The player's launch input supplies the real impulse.
 		-- LOCAL space — rendering adds arenaOrigin.
 		local side = (i == 1) and -1 or 1
-		bState.position = Vector3.new(side * 10, 10, 0)
+		bState.position = Vector3.new(side * spawnRadius, 10, 0)
 		bState.velocity = Vector3.new(
 			-side * Constants.SpawnInwardSpeed,
 			0,

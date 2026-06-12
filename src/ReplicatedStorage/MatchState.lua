@@ -40,6 +40,7 @@ function MatchState.new(matchSeed: number)
         -- Multi-match additions (ADR-001)
         arenaOrigin = Vector3.new(0, 0, 0), -- world offset for rendering; sim stays local-space
         collisionSeqCounter = 0,            -- per-tick collision id sequence (was module state)
+        stadiumId = "Classic",              -- registry key; physics resolves per-stadium params
     }
 end
 

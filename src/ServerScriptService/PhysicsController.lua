@@ -12,6 +12,7 @@
 ]=]
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
+local Stadiums = require(ReplicatedStorage:WaitForChild("Stadiums"))
 local TickManager = require(script.Parent:WaitForChild("TickManager"))
 local CollisionClassifier = require(script.Parent:WaitForChild("CollisionClassifier"))
 
@@ -116,8 +117,12 @@ function PhysicsController.OnPhysicsPhase(matchState)
 
 	local tickDt = 1 / Constants.SimulationTickRate
 	local subDt = tickDt / Constants.CollisionSubSteps
-	local R = Constants.BowlSphereRadius
-	local rimLimit = Constants.BowlPlayableRadius - (Constants.BeyRadius * Constants.BowlRimBuffer)
+	-- Spatial parameters come from the match's stadium (plan §Phase 3: the
+	-- stadium is the content axis). Classic mirrors Constants exactly.
+	local stadium = Stadiums.get(matchState.stadiumId)
+	local R = stadium.bowlSphereRadius
+	local rimLimit = stadium.playableRadius - (Constants.BeyRadius * stadium.rimBuffer)
+	local bowlForce = stadium.bowlForce
 	-- Derived so (frictionPerSubStep ^ CollisionSubSteps) == FrictionDecay, preserving per-second decay
 	local frictionPerSubStep = Constants.FrictionDecay ^ (1 / Constants.CollisionSubSteps)
 
@@ -158,7 +163,7 @@ function PhysicsController.OnPhysicsPhase(matchState)
 			-- 5. Gentle bowl drift toward center (XZ-only so drift is horizontal)
 			local toCenter = Vector3.new(-bState.position.X, 0, -bState.position.Z).Unit
 			if toCenter == toCenter then -- NaN guard: .Unit is NaN when Bey is exactly at centre
-				bState.velocity += toCenter * Constants.BowlForce * subDt
+				bState.velocity += toCenter * bowlForce * subDt
 			end
 
 			-- 6. Command steering forces

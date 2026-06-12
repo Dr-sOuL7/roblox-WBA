@@ -33,6 +33,13 @@ _G.RunValidationSuite = function(options)
     end)
 end
 
+-- Per-stadium ship gate (Phase 3): _G.RunStadiumGate("Compact")
+_G.RunStadiumGate = function(stadiumId, options)
+    task.spawn(function()
+        SimulationHarness.RunStadiumGate(stadiumId, options)
+    end)
+end
+
 local Remotes = require(game:GetService("ReplicatedStorage"):WaitForChild("Remotes"))
 local LaunchValidator = require(script.Parent:WaitForChild("LaunchValidator"))
 local CommandValidator = require(script.Parent:WaitForChild("CommandValidator"))

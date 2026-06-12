@@ -65,7 +65,20 @@ if mode == "suite" or mode == "batch" then
 			policyA = args[3] or "None",
 			policyB = args[4] or "None",
 			baseSeed = tonumber(args[5]),
+			stadiumId = args[6],
 		})
+	end
+
+elseif mode == "stadium" then
+	require(__tokens["ServerScriptService/BeyController"])
+	require(__tokens["ServerScriptService/PhysicsController"])
+	require(__tokens["ServerScriptService/SpinEvaluator"])
+	local SimulationHarness = require(__tokens["ServerScriptService/SimulationHarness"])
+
+	local stadiumId = args[2] or "Classic"
+	local results = SimulationHarness.RunStadiumGate(stadiumId, { count = tonumber(args[3]) or 500 })
+	if not results.allPass then
+		error("Stadium gate reported CUT for " .. stadiumId, 0)
 	end
 
 elseif mode == "persistence" then
@@ -203,6 +216,47 @@ elseif mode == "persistence" then
 
 	local MmrLogic = require(__tokens["ServerScriptService/Matchmaking/MmrLogic"])
 	local MatchQueue = require(__tokens["ServerScriptService/Matchmaking/MatchQueue"])
+
+	local Stadiums = require(__tokens["ReplicatedStorage/Stadiums"])
+
+	print("──────── Stadium registry tests ────────")
+
+	test("stadiums: Classic mirrors the validated Constants exactly", function()
+		local classic = Stadiums.get("Classic")
+		expect(classic.bowlSphereRadius == Constants.BowlSphereRadius)
+		expect(classic.playableRadius == Constants.BowlPlayableRadius)
+		expect(classic.rimBuffer == Constants.BowlRimBuffer)
+		expect(classic.bowlForce == Constants.BowlForce)
+	end)
+	test("stadiums: every registry entry validates", function()
+		for id, def in pairs(Stadiums.REGISTRY) do
+			local ok, why = Stadiums.validate(def)
+			expect(ok, id .. ": " .. tostring(why))
+			expect(def.id == id, id .. ": id field mismatch")
+		end
+	end)
+	test("stadiums: rotation entries exist in the registry", function()
+		expect(#Stadiums.ROTATION >= 1)
+		for _, id in ipairs(Stadiums.ROTATION) do
+			expect(Stadiums.REGISTRY[id] ~= nil, "rotation references unknown stadium " .. tostring(id))
+		end
+	end)
+	test("stadiums: unknown id falls back to default", function()
+		expect(Stadiums.get("NotARealStadium").id == Stadiums.DEFAULT_ID)
+		expect(Stadiums.get(nil).id == Stadiums.DEFAULT_ID)
+	end)
+	test("stadiums: validate rejects malformed definitions", function()
+		expect(not Stadiums.validate({ id = "X", playableRadius = 4, bowlSphereRadius = 50, rimBuffer = 0.8, bowlForce = 7 }))
+		expect(not Stadiums.validate({ id = "X", playableRadius = 20, bowlSphereRadius = 10, rimBuffer = 0.8, bowlForce = 7 }))
+		expect(not Stadiums.validate({ id = "", playableRadius = 20, bowlSphereRadius = 50, rimBuffer = 0.8, bowlForce = 7 }))
+	end)
+	test("stadiums: seeded rotation pick is deterministic and in range", function()
+		for seed = 0, 25 do
+			local id = Stadiums.pickForSeed(seed)
+			expect(Stadiums.REGISTRY[id] ~= nil)
+			expect(Stadiums.pickForSeed(seed) == id)
+		end
+	end)
 
 	print("──────── Pending adjustment tests (offline-safe writes) ────────")
 
@@ -387,5 +441,5 @@ elseif mode == "persistence" then
 	finishTests("Logic tests")
 
 else
-	error("Unknown mode: " .. tostring(mode) .. " (expected 'suite', 'batch' or 'persistence')", 0)
+	error("Unknown mode: " .. tostring(mode) .. " (expected 'suite', 'batch', 'stadium' or 'persistence')", 0)
 end

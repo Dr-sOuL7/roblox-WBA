@@ -21,6 +21,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local MatchState = require(ReplicatedStorage:WaitForChild("MatchState"))
 local LaunchQuality = require(ReplicatedStorage:WaitForChild("LaunchQuality"))
+local Stadiums = require(ReplicatedStorage:WaitForChild("Stadiums"))
 local TickManager = require(script.Parent:WaitForChild("TickManager"))
 local MatchInstance = require(script.Parent:WaitForChild("MatchInstance"))
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
@@ -118,6 +119,8 @@ function SimulationHarness.RunBatch(numMatches: number, options)
 	local policyNameB = options.policyB or "None"
 	local launchMode = options.launchMode or "Launched"
 	local baseSeed = options.baseSeed or DEFAULT_BASE_SEED
+	local stadiumId = options.stadiumId or Stadiums.DEFAULT_ID
+	local stadiumDef = Stadiums.get(stadiumId)
 
 	assert(POLICIES[policyNameA] ~= nil or policyNameA == "None", "Unknown policy: " .. tostring(policyNameA))
 	assert(POLICIES[policyNameB] ~= nil or policyNameB == "None", "Unknown policy: " .. tostring(policyNameB))
@@ -133,6 +136,7 @@ function SimulationHarness.RunBatch(numMatches: number, options)
 		policyB          = policyNameB,
 		launchMode       = launchMode,
 		baseSeed         = baseSeed,
+		stadiumId        = stadiumId,
 		draws            = 0,
 		player1Wins      = 0,
 		player2Wins      = 0,
@@ -169,6 +173,7 @@ function SimulationHarness.RunBatch(numMatches: number, options)
 		state.matchId = "SimMatch_" .. tostring(i)
 		state.phase = "Active"
 		state.isHeadless = true -- suppresses per-finish console prints in hot paths
+		state.stadiumId = stadiumId
 
 		state.playerOrder = { p1Id, p2Id } -- already sorted ascending
 
@@ -182,7 +187,8 @@ function SimulationHarness.RunBatch(numMatches: number, options)
 		-- so batches stay deterministic.
 		local function setupBey(pid, side)
 			local b = MatchState.createBeyState(pid)
-			b.position = Vector3.new(side * 10, 10, 0)
+			-- Mirrors MatchManager: spawn at half the playable radius (Classic: ±10)
+			b.position = Vector3.new(side * stadiumDef.playableRadius * 0.5, 10, 0)
 			if launchMode == "Launched" then
 				local speed = Constants.PrototypeLaunchSpeed * rng:NextNumber(0.9, 1.1)
 				local jitter = rng:NextNumber(-0.15, 0.15) -- radians around the centre aim
@@ -328,7 +334,8 @@ function SimulationHarness.PrintReport(m)
 	print("==================================================")
 	print("           SIMULATION HARNESS REPORT              ")
 	print("==================================================")
-	print(string.format("Matchup:            P1=%s vs P2=%s | %s (seed %d)", m.policyA, m.policyB, m.launchMode, m.baseSeed))
+	print(string.format("Matchup:            P1=%s vs P2=%s | %s | Stadium=%s (seed %d)",
+		m.policyA, m.policyB, m.launchMode, m.stadiumId, m.baseSeed))
 	print(string.format("Total Matches:      %d", m.totalMatches))
 	print(string.format("Average Duration:   %.2fs", m.avgDurationSeconds))
 	print(string.format("Shortest Match:     %.2fs", m.shortestSeconds))
@@ -497,6 +504,62 @@ function SimulationHarness.RunValidationSuite(options)
 	print("###########################################################")
 
 	return { idle = idle, baseline = baseline, commandBaseline = cmdBaseline, matrix = matrix, gates = results, allPass = allPass }
+end
+
+-- ── Per-stadium ship gate (plan §Phase 3) ─────────────────────────────────────
+-- Every stadium re-runs idle containment + the command baseline against the
+-- same bands before entering ROTATION. "A stadium that pushes ring-out > 50%
+-- or duration < 15 s is cut" — our bands are tighter still.
+
+function SimulationHarness.RunStadiumGate(stadiumId, options)
+	options = options or {}
+	local count = options.count or 500
+
+	print(string.format("############ STADIUM GATE: %s ############", tostring(stadiumId)))
+
+	local idle = SimulationHarness.RunBatch(200, {
+		policyA = "None", policyB = "None", launchMode = "Idle",
+		stadiumId = stadiumId, quiet = true,
+	})
+	local cmd = SimulationHarness.RunBatch(count, {
+		policyA = "Random", policyB = "Random",
+		stadiumId = stadiumId, quiet = true,
+	})
+	SimulationHarness.PrintReport(cmd)
+
+	local results = {}
+	gateLine(results, "S0 Idle containment",
+		idle.ringOuts == 0 and idle.forcedStops == 0,
+		string.format("idle ring-outs=%d forcedStops=%d", idle.ringOuts, idle.forcedStops))
+	gateLine(results, "S1 Stability",
+		cmd.forcedStops == 0 and cmd.phaseErrors == 0,
+		string.format("forcedStops=%d phaseErrors=%d", cmd.forcedStops, cmd.phaseErrors))
+	gateLine(results, "S2 Duration",
+		cmd.avgDurationSeconds >= GATES.durationMin and cmd.avgDurationSeconds <= GATES.durationMax,
+		string.format("avg %.1fs (band %d–%ds)", cmd.avgDurationSeconds, GATES.durationMin, GATES.durationMax))
+	gateLine(results, "S3 Finish mix",
+		band(cmd.spinOutShare, GATES.spinOutBand)
+			and band(cmd.wobbleShare, GATES.wobbleBand)
+			and band(cmd.ringOutShare, GATES.ringOutBand),
+		string.format("SpinOut %.0f%% (40–65) | Wobble %.0f%% (20–40) | RingOut %.0f%% (10–30)",
+			cmd.spinOutShare * 100, cmd.wobbleShare * 100, cmd.ringOutShare * 100))
+	gateLine(results, "S4 Symmetry",
+		math.abs(cmd.p1WinRate - cmd.p2WinRate) <= GATES.symmetryTolerance,
+		string.format("|P1-P2| = %.1fpp", math.abs(cmd.p1WinRate - cmd.p2WinRate) * 100))
+	gateLine(results, "S5 Draw rate",
+		cmd.drawRate <= GATES.maxDrawRate,
+		string.format("%.1f%% (max %.0f%%)", cmd.drawRate * 100, GATES.maxDrawRate * 100))
+
+	local allPass = true
+	for _, r in ipairs(results) do
+		if not r.pass then allPass = false end
+	end
+	print(allPass
+		and string.format("STADIUM %s: SHIP — add to Stadiums.ROTATION", tostring(stadiumId))
+		or  string.format("STADIUM %s: CUT or retune — bands violated", tostring(stadiumId)))
+	print("###########################################################")
+
+	return { idle = idle, commandBaseline = cmd, gates = results, allPass = allPass }
 end
 
 return SimulationHarness

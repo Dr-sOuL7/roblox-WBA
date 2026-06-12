@@ -6,7 +6,24 @@
 
 ## Phase
 
-**Phase 2 — Competitive Gameplay: engineering COMPLETE, live validation (V1–V6) pending.**
+**Phase 3 — Content Expansion: IN PROGRESS (director's call).**
+
+Validation debt carried forward (release gates, unaffected by Phase 3 work):
+Phase 1 H1–H5 and Phase 2 V1–V6 (`VALIDATION_RUNBOOK.md`) — need 2 testers +
+a published place, ~3 h total.
+
+### Phase 3 progress
+
+| Item | State |
+|---|---|
+| Stadium registry + data-driven generation | ✅ done — `Stadiums.lua`; physics resolves per-match stadium; Classic == validated baseline EXACTLY |
+| Per-stadium ship gate | ✅ done — `_G.RunStadiumGate(id)` / runner `stadium` mode; bands enforced before ROTATION |
+| Bey-variant decision documented and locked | ✅ done — `docs/ADR-002-bey-variants.md`: cosmetic-only, by constitution |
+| 3+ validated stadiums in rotation | ⬜ next cycle — design Compact/Grand variants, tune through the gate |
+| Cosmetic skin system (+ neutrality audit) | ⬜ |
+| Stadium select (casual) / reveal (ranked) UI | ⬜ |
+
+### Phase 2 (engineering complete, validation pending)
 
 Phase 2 was opened by director instruction with Phase 1 human gates (H1–H5)
 still pending. This is sound for the current work because the persistence layer
