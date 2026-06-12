@@ -203,12 +203,8 @@ function SimulationHarness.RunBatch(numMatches: number, options)
 				local cosJ, sinJ = math.cos(jitter), math.sin(jitter)
 				b.velocity = Vector3.new(dx * cosJ * speed, 0, -dx * sinJ * speed)
 				b.angularVelocity = Vector3.new(0, Constants.PrototypeLaunchSpin * multiplier, 0)
-			else -- "Idle": never launched, spawn drift only
-				b.velocity = Vector3.new(
-					-side * Constants.SpawnInwardSpeed,
-					0,
-					-side * Constants.SpawnTangentialSpeed
-				)
+			else -- "Idle": never launched — held frozen, gravity does the rest
+				b.velocity = Vector3.new(0, 0, 0)
 			end
 			b.previousPosition = b.position
 			state.beyStates[pid] = b

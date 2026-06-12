@@ -13,6 +13,7 @@ local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
 local MatchState = require(ReplicatedStorage:WaitForChild("MatchState"))
 local Stadiums = require(ReplicatedStorage:WaitForChild("Stadiums"))
 local Cosmetics = require(ReplicatedStorage:WaitForChild("Cosmetics"))
+local LaunchQuality = require(ReplicatedStorage:WaitForChild("LaunchQuality"))
 local TickManager = require(script.Parent:WaitForChild("TickManager"))
 local MatchInstance = require(script.Parent:WaitForChild("MatchInstance"))
 local ProfileStore = require(script.Parent:WaitForChild("Persistence"):WaitForChild("ProfileStore"))
@@ -277,11 +278,10 @@ function MatchManager.StartNewMatch(playerIds, options)
 	newState.stadiumId = options.stadiumId or Stadiums.pickForSeed(matchSeed)
 	local stadiumDef = Stadiums.get(newState.stadiumId)
 
-	-- Begin with an authoritative countdown
-	newState.phase = "Countdown"
-	local now = workspace:GetServerTimeNow()
-	newState.timers.countdownEndTime = now + 3 -- 3 second countdown
-	newState.timers.launchBarEpoch = now       -- timing bar sweeps from countdown start
+	-- Begin with the aim-and-ready ceremony; countdown starts when both
+	-- players are READY (or the deadline auto-readies stragglers)
+	newState.phase = "Setup"
+	newState.timers.setupDeadline = workspace:GetServerTimeNow() + Constants.SetupTimeoutSeconds
 
 	-- Build canonical sorted player order — all modules iterate this, never pairs()
 	local sortedIds = table.clone(playerIds)
@@ -314,18 +314,15 @@ function MatchManager.StartNewMatch(playerIds, options)
 
 	for i, pid in ipairs(playerIds) do
 		local bState = MatchState.createBeyState(pid)
-		-- Spawn high above the bowl (Y=10); gentle pre-launch drift only.
-		-- The player's launch input supplies the real impulse.
+		-- Held frozen at the spawn point through Setup/Countdown; the launch
+		-- click (or the Poor auto-launch) supplies ALL motion.
 		-- LOCAL space — rendering adds arenaOrigin.
 		local side = (i == 1) and -1 or 1
-		bState.position = Vector3.new(side * spawnRadius, 10, 0)
-		bState.velocity = Vector3.new(
-			-side * Constants.SpawnInwardSpeed,
-			0,
-			-side * Constants.SpawnTangentialSpeed
-		)
+		bState.position = Vector3.new(side * spawnRadius, Constants.LaunchHeightDefault, 0)
+		bState.velocity = Vector3.new(0, 0, 0)
 		bState.previousPosition = bState.position
 		newState.beyStates[pid] = bState
+		newState.pendingAim[pid] = LaunchQuality.defaultAimFor(side)
 
 		createPrototypeBeyModel(pid, i == 1, folder, origin, Cosmetics.get(newState.cosmetics[pid]))
 	end
@@ -336,12 +333,11 @@ function MatchManager.StartNewMatch(playerIds, options)
 
 	TickManager.RegisterInstance(instance)
 
-	-- Broadcast match start (Countdown phase) to participants
+	-- Broadcast match start (Setup phase) to participants
 	instance:BroadcastPhase({
 		seed = newState.matchSeed,
 		players = playerIds,
-		countdownEndTime = newState.timers.countdownEndTime,
-		launchBarEpoch = newState.timers.launchBarEpoch,
+		setupDeadline = newState.timers.setupDeadline,
 	})
 
 	return instance
@@ -360,6 +356,36 @@ function MatchManager.CleanupMatch(instance)
 	if _onMatchCleanedUpCallback then
 		_onMatchCleanedUpCallback(instance)
 	end
+end
+
+-- ── Launch ceremony: READY ────────────────────────────────────────────────────
+
+-- Remote-facing: marks a participant ready and stores their (clamped) aim as
+-- the auto-launch fallback. The Setup tick advances to Countdown when all
+-- participants are ready.
+function MatchManager.HandleReady(player, aim)
+	local instance = TickManager.GetInstanceForPlayer(player.UserId)
+	if not instance then
+		return
+	end
+	local state = instance.state
+	if state.phase ~= "Setup" then
+		return
+	end
+	if not state.beyStates[player.UserId] then
+		return
+	end
+
+	state.pendingAim[player.UserId] = LaunchQuality.clampAim(aim)
+	if not state.ready[player.UserId] then
+		state.ready[player.UserId] = true
+		print(string.format("[Match %s] Player %d is READY", state.matchId, player.UserId))
+	end
+	-- Let both clients show ready ticks (phase is still Setup)
+	instance:BroadcastPhase({
+		setupDeadline = state.timers.setupDeadline,
+		ready = state.ready,
+	})
 end
 
 -- ── Disconnect handling: grace → reconnect or forfeit (plan §Phase 2) ────────
@@ -419,7 +445,7 @@ function MatchManager.HandlePlayerLeft(userId)
 	end
 
 	local state = instance.state
-	if state.phase == "Countdown" then
+	if state.phase == "Setup" or state.phase == "Countdown" then
 		cancelCountdownMatch(instance, userId)
 		return
 	end

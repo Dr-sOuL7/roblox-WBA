@@ -1,14 +1,15 @@
 --[=[
 	LaunchValidator.lua
 	Validates and queues launch inputs from clients.
-	Enforces single-fire-per-match, sanity bounds, and timing-bar grading.
 
-	Grading is server-authoritative off the SYNCED clock: the client claims
-	the GetServerTimeNow() it pressed at; the server bounds the claim's skew
-	against receipt time and grades with the shared LaunchQuality math. A
-	fabricated claim earns at most Perfect (+LaunchBonusCap) — the cap is the
-	anti-cheat ceiling. Launches after the post-countdown window grade Poor,
-	which retires the late-launch spin-decay exploit.
+	The client submits ONLY aim numbers + a claimed press time:
+	  { height, theta, phi, claimedServerTime }
+	The server clamps every number, grades |click − GO| with the shared
+	LaunchQuality math off the SYNCED clock, and constructs the velocity
+	vector itself — no client-supplied vectors exist anywhere. A fabricated
+	time claim earns at most Perfect (+LaunchBonusCap): the cap is the
+	anti-cheat ceiling. Single-fire per match; missed clicks are handled by
+	the server-side Poor auto-launch (BeyController).
 ]=]
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
@@ -52,8 +53,8 @@ function LaunchValidator.ValidateAndQueue(player, sequenceId, launchData)
 		warn("[LaunchValidator] No active match for player " .. player.Name)
 		return
 	end
-	if matchState.phase == "Finished" then
-		return
+	if matchState.phase ~= "Countdown" and matchState.phase ~= "Active" then
+		return -- Setup: wait for GO; Finished: too late
 	end
 
 	local bState = matchState.beyStates[player.UserId]
@@ -68,37 +69,25 @@ function LaunchValidator.ValidateAndQueue(player, sequenceId, launchData)
 		return
 	end
 
-	-- Sanitise inputs
-	local vector = launchData and launchData.launchVector or Vector3.new(0, 0, 0)
-	local power  = launchData and launchData.spinPower   or 50
+	-- ── Clamp the aim; never trust client geometry ────────────────────────────
+	local aim = LaunchQuality.clampAim(launchData)
+	matchState.pendingAim[player.UserId] = aim -- keep fallback in sync
 
-	-- ── Timing-bar grading ────────────────────────────────────────────────────
+	-- ── GO-moment grading ─────────────────────────────────────────────────────
 	local now = workspace:GetServerTimeNow()
 	local claimed = launchData and tonumber(launchData.claimedServerTime) or now
 	-- Bound the claim: no future presses, no stale/forged timestamps
 	if claimed > now or (now - claimed) > Constants.LaunchClaimSkewMax then
 		claimed = now
 	end
+	local quality = LaunchQuality.gradeAtGo(claimed, matchState.timers.countdownEndTime)
 
-	local quality
-	local windowEnd = matchState.timers.countdownEndTime + Constants.LaunchWindowAfterActive
-	if claimed > windowEnd then
-		quality = "Poor" -- late launch: the window has closed
-	else
-		quality = LaunchQuality.gradeAt(claimed, matchState.timers.launchBarEpoch)
-	end
-
+	-- ── Server-built velocity: aim × server speed × quality × stadium ─────────
 	local multiplier = LaunchQuality.multiplierFor(quality)
-	-- Stadium launch scaling is spatial design (a tight pit takes gentler
-	-- entries); it scales translation only — spin is untouched
 	local stadium = Stadiums.get(matchState.stadiumId)
-	vector = vector * (multiplier * (stadium.launchSpeedScale or 1))
-	power = power * multiplier
-
-	if vector.Magnitude > Constants.VelocityClampMax then
-		vector = vector.Unit * Constants.VelocityClampMax
-	end
-	power = math.clamp(power, 0, 200)
+	local speed = Constants.PrototypeLaunchSpeed * (stadium.launchSpeedScale or 1) * multiplier
+	local vector = LaunchQuality.aimToVector(aim, speed)
+	local power = math.clamp(Constants.PrototypeLaunchSpin * multiplier, 0, 200)
 
 	-- Mark consumed before queuing to prevent race conditions
 	bState.launchConsumed = true
@@ -110,6 +99,7 @@ function LaunchValidator.ValidateAndQueue(player, sequenceId, launchData)
 			launchVector = vector,
 			spinPower = power,
 			quality = quality,
+			height = aim.height,
 		},
 	})
 

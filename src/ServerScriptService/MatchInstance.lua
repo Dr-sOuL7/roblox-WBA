@@ -57,10 +57,21 @@ function MatchInstance:ResyncPlayer(userId)
 	self:BroadcastPhase({
 		seed = self.state.matchSeed,
 		players = table.clone(self.state.playerOrder),
+		setupDeadline = self.state.timers.setupDeadline,
 		countdownEndTime = self.state.timers.countdownEndTime,
-		launchBarEpoch = self.state.timers.launchBarEpoch,
+		ready = self.state.ready,
 		resync = true,
 	}, userId)
+end
+
+-- All participants clicked READY?
+function MatchInstance:AllReady(): boolean
+	for _, pid in ipairs(self.state.playerOrder) do
+		if not self.state.ready[pid] then
+			return false
+		end
+	end
+	return true
 end
 
 --[=[
@@ -83,7 +94,25 @@ function MatchInstance:StepTick(isHeadless)
 	-- Clear events from the PREVIOUS tick
 	table.clear(state.tickEvents)
 
-	if state.phase == "Countdown" then
+	if state.phase == "Setup" then
+		-- Aim-and-ready ceremony: advance when everyone is ready, or when the
+		-- setup deadline auto-readies the stragglers (AFK can't hold a match).
+		if isHeadless then
+			state.phase = "Active" -- harness skips the ceremony entirely
+		elseif self:AllReady() or workspace:GetServerTimeNow() >= state.timers.setupDeadline then
+			state.phase = "Countdown"
+			state.timers.countdownEndTime = workspace:GetServerTimeNow() + 3 -- 3·2·1·GO
+			print(string.format("[Match %s] Phase transition: Setup -> Countdown", state.matchId))
+			self:BroadcastPhase({ countdownEndTime = state.timers.countdownEndTime })
+		end
+		if not isHeadless then
+			self._replicationCounter += 1
+			if self._replicationCounter >= REPLICATION_INTERVAL then
+				self._replicationCounter = 0
+				TickManager.RunPhase("Replication", state)
+			end
+		end
+	elseif state.phase == "Countdown" then
 		if isHeadless or workspace:GetServerTimeNow() >= state.timers.countdownEndTime then
 			state.phase = "Active"
 			if not isHeadless then

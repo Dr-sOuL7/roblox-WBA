@@ -9,19 +9,23 @@ local MatchState = {}
 function MatchState.new(matchSeed: number)
     return {
         matchId = "",
-        phase = "Countdown", -- Countdown, Active, Finished
+        phase = "Setup", -- Setup (aim + ready), Countdown, Active, Finished
         tickNumber = 0,
         serverTimestamp = workspace:GetServerTimeNow(),
         matchSeed = matchSeed or os.time(), -- Deterministic RNG seed
         
         timers = {
             matchStart = 0,
-            countdownEndTime = 0,
-            launchBarEpoch = 0, -- timing-bar start (synced server clock)
+            setupDeadline = 0,     -- auto-ready moment (synced server clock)
+            countdownEndTime = 0,  -- the GO instant: launch grading anchor
             duration = 0,
         },
         activePlayers = {},
         beyStates = {}, -- mapping of playerId -> BeyState
+
+        -- Launch ceremony (Setup phase)
+        ready = {},      -- playerId -> true once they clicked READY
+        pendingAim = {}, -- playerId -> clamped {height, theta, phi}; auto-launch fallback
         
         -- Artificial Collision Cooldown Map: e.g. ["idA_idB"] = remainingTicks
         collisionCooldowns = {}, 

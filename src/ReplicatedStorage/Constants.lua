@@ -14,28 +14,28 @@ local Constants = {
 	PrototypeLaunchSpeed = 21,
 	PrototypeLaunchSpin = 100,
 
-	-- Launch timing bar (Phase 2 skill layer). The bar position is a pure
-	-- function of the SYNCED server clock and the match's countdown epoch —
-	-- client preview and server grading share LaunchQuality.lua, so they
-	-- cannot disagree. Zones are fractions of bar travel around the centre:
-	-- at a 1.2 s period the Perfect zone is ~144 ms of travel per pass.
-	LaunchBarPeriod = 1.2,
-	LaunchPerfectZone = 0.06,        -- |pos - 0.5| ≤ this → Perfect
-	LaunchGoodZone = 0.18,           -- |pos - 0.5| ≤ this → Good
+	-- Launch ceremony (director's design): Setup (aim sliders) → both READY →
+	-- 3·2·1·GO–SHOOT! → click LAUNCH at the GO instant. Grading = |click − GO|
+	-- on the SYNCED server clock; client preview and server verdict share
+	-- LaunchQuality.lua so they cannot disagree.
+	LaunchPerfectWindow = 0.12,      -- s from GO → Perfect
+	LaunchGoodWindow = 0.30,         -- s from GO → Good; beyond → Poor
 	LaunchBonusPerfect = 0.15,       -- == LaunchBonusCap; the ceiling
 	LaunchBonusGood = 0.07,
-	LaunchBonusPoor = -0.08,         -- also the grade for late launches:
-	                                 -- cancels the ~5% late-spin decay edge,
-	                                 -- retiring the late-launch exploit
-	LaunchWindowAfterActive = 3,     -- s after Active start; later = Poor
+	LaunchBonusPoor = -0.08,         -- "a bad start, correspondingly"
 	LaunchClaimSkewMax = 0.5,        -- s; max |claimed - receipt| accepted
+	SetupTimeoutSeconds = 30,        -- auto-ready: AFK can't hold the match hostage
+	AutoLaunchDelay = 2,             -- s after GO; missed clicks launch at Poor
 
-	-- Pre-launch spawn drift (server-set at spawn, overridden by the launch).
-	-- Tangential 15 + inward 5 keeps an idle Bey orbiting INSIDE the bowl:
-	-- the old (0,0,±60) tangential spawn reached the rim in 0.26 s and
-	-- self-ring-outed any player who didn't launch within the first second.
-	SpawnTangentialSpeed = 15,
-	SpawnInwardSpeed = 5,
+	-- Aim slider ranges (spherical): height = release height; theta = elevation
+	-- from vertical (90 = flat, lower = steeper plunge with less carry);
+	-- phi = azimuth (0 = +X). Client sends ONLY these numbers — the server
+	-- clamps them and builds the velocity vector itself.
+	LaunchHeightMin = 6,
+	LaunchHeightMax = 18,
+	LaunchHeightDefault = 10,
+	LaunchThetaMin = 45,
+	LaunchThetaMax = 90,
 
 	-- ── Multi-match server (ADR-001) ──────────────────────────────────────────
 	-- One server simulates several concurrent matches. Each match gets an

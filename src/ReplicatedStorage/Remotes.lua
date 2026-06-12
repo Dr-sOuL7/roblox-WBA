@@ -50,6 +50,7 @@ local Remotes = {
 	RequestCommand  = getOrCreateRemote("RequestCommand"),
 	RequestQueue    = getOrCreateRemote("RequestQueue"),
 	RequestEquip    = getOrCreateRemote("RequestEquip"),
+	RequestReady    = getOrCreateRemote("RequestReady"),
 
 	-- Server to Client
 	MatchStateChanged   = getOrCreateRemote("MatchStateChanged"),

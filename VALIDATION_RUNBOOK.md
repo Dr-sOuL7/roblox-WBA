@@ -18,8 +18,10 @@ Hardware: 2 desktop testers (mouse/keyboard). Build: sync with Rojo
      into Casual; a lone player on an idle server gets practice).
    - Expect a loud "[ProfileStore] DataStores unavailable in Studio" warning —
      the in-memory mock is intended in Studio without API access.
-   - Press **F** → Bey accelerates toward the bowl centre; spin number ~100 on
-     the F2 overlay (F2 toggles the debug overlay, default off).
+   - **Launch ceremony:** aim panel appears (HEIGHT / ANGLE θ / AIM φ sliders)
+     → click READY → 3·2·1 countdown → big "GO! SHOOT!" → click LAUNCH (or F)
+     AT the GO instant. Grade toast shows Perfect/Good/Poor. Let one match
+     auto-launch (don't click): ~2 s after GO it fires at Poor with "(AUTO)".
    - Commands: each button glows the Bey (red/blue/green), shows duration then
      cooldown, server confirms within a snapshot or two.
    - Let the match run to a finish → result screen → automatic rematch in 5 s.
@@ -31,10 +33,12 @@ Hardware: 2 desktop testers (mouse/keyboard). Build: sync with Rojo
 
 ## Gate H1 — Live match loop (2 testers, Studio "Start Server + 2 Players")
 
-10 consecutive matches without restart. Every match must: start, accept both
-launches, accept commands from both seats, finish with a correct winner/draw
-screen on **both** clients, and auto-rematch. Any stall, wrong-winner, or
-desync = FAIL → file, fix, restart the count.
+10 consecutive matches without restart. Every match must: enter Setup (both
+see the aim panel), proceed on both READY clicks (also test the 30 s
+auto-ready once by not clicking), count down 3·2·1·GO on both screens,
+grade both launches, accept commands from both seats, finish with a correct
+winner/draw screen on **both** clients, and auto-rematch. Any stall,
+wrong-winner, or desync = FAIL → file, fix, restart the count.
 
 ## Gate H2 — Readability baseline (during H1's 10 matches)
 

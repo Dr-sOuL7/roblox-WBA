@@ -12,6 +12,14 @@ Validation debt carried forward (release gates, unaffected by Phase 3 work):
 Phase 1 H1–H5 and Phase 2 V1–V6 (`VALIDATION_RUNBOOK.md`) — need 2 testers +
 a published place, ~3 h total.
 
+### Launch ceremony (director's redesign, post-Phase 3)
+
+Setup phase (HEIGHT/θ/φ aim sliders) → both READY (30 s auto-ready) →
+3·2·1·GO–SHOOT! → click at the GO instant (±0.12 s Perfect / ±0.30 s Good /
+else Poor); missed clicks auto-launch Poor 2 s after GO. Client submits only
+slider numbers — the server clamps and builds all vectors (anti-cheat
+strictly tightened). H-gate scripts updated in the runbook.
+
 ### Phase 3 progress
 
 | Item | State |

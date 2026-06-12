@@ -87,27 +87,17 @@ elseif mode == "persistence" then
 	local LaunchQuality = require(__tokens["ReplicatedStorage/LaunchQuality"])
 	local Constants = require(__tokens["ReplicatedStorage/Constants"])
 
-	print("──────── Launch quality tests ────────")
+	print("──────── Launch ceremony tests (GO grading + spherical aim) ────────")
 
-	test("bar: triangle sweep 0 -> 1 -> 0", function()
-		local period = Constants.LaunchBarPeriod
-		local function near(a, b)
-			return math.abs(a - b) < 1e-9
-		end
-		expect(near(LaunchQuality.barPosition(0, 0), 0))
-		expect(near(LaunchQuality.barPosition(period / 4, 0), 0.5))
-		expect(near(LaunchQuality.barPosition(period / 2, 0), 1))
-		expect(near(LaunchQuality.barPosition(3 * period / 4, 0), 0.5))
-		expect(near(LaunchQuality.barPosition(period, 0), 0))
-	end)
-	test("grade: centre is Perfect, bands are ordered", function()
-		local period = Constants.LaunchBarPeriod
-		expect(LaunchQuality.gradeAt(period / 4, 0) == "Perfect")
-		-- position 0.5 + LaunchGoodZone - small epsilon -> Good
-		local goodTime = (0.5 + Constants.LaunchGoodZone - 0.01) * (period / 2)
-		expect(LaunchQuality.gradeAt(goodTime, 0) == "Good", "got " .. LaunchQuality.gradeAt(goodTime, 0))
-		-- far edge -> Poor
-		expect(LaunchQuality.gradeAt(0.01, 0) == "Poor")
+	test("grade: GO instant is Perfect, windows are ordered", function()
+		local go = 1000
+		expect(LaunchQuality.gradeAtGo(go, go) == "Perfect")
+		expect(LaunchQuality.gradeAtGo(go + Constants.LaunchPerfectWindow - 0.001, go) == "Perfect")
+		expect(LaunchQuality.gradeAtGo(go - Constants.LaunchPerfectWindow + 0.001, go) == "Perfect")
+		expect(LaunchQuality.gradeAtGo(go + Constants.LaunchPerfectWindow + 0.01, go) == "Good")
+		expect(LaunchQuality.gradeAtGo(go + Constants.LaunchGoodWindow - 0.001, go) == "Good")
+		expect(LaunchQuality.gradeAtGo(go - Constants.LaunchGoodWindow - 0.01, go) == "Poor")
+		expect(LaunchQuality.gradeAtGo(go + 2, go) == "Poor")
 	end)
 	test("bonus: every tier honours LaunchBonusCap", function()
 		for quality, bonus in pairs(LaunchQuality.BONUS) do
@@ -116,6 +106,38 @@ elseif mode == "persistence" then
 		end
 		expect(LaunchQuality.multiplierFor("Perfect") == 1 + Constants.LaunchBonusPerfect)
 		expect(LaunchQuality.multiplierFor("NotATier") == 1)
+	end)
+	test("aim: clamp enforces ranges, wraps phi, survives garbage", function()
+		local a = LaunchQuality.clampAim({ height = 99, theta = 10, phi = 725 })
+		expect(a.height == Constants.LaunchHeightMax)
+		expect(a.theta == Constants.LaunchThetaMin)
+		expect(math.abs(a.phi - 5) < 1e-9, "phi should wrap to 5, got " .. tostring(a.phi))
+		local b = LaunchQuality.clampAim(nil)
+		expect(b.height == Constants.LaunchHeightDefault and b.theta == Constants.LaunchThetaMax)
+		local c = LaunchQuality.clampAim({ height = "evil", theta = {}, phi = "nan?" })
+		expect(c.height == Constants.LaunchHeightDefault and c.phi == 0)
+	end)
+	test("aim: vectors honour theta/phi and never aim upward", function()
+		local function near(x, y) return math.abs(x - y) < 1e-6 end
+		-- Flat launch along +X
+		local flat = LaunchQuality.aimToVector({ height = 10, theta = 90, phi = 0 }, 21)
+		expect(near(flat.X, 21) and near(flat.Y, 0) and near(flat.Z, 0))
+		-- Flat launch along +Z
+		local z = LaunchQuality.aimToVector({ height = 10, theta = 90, phi = 90 }, 21)
+		expect(near(z.Z, 21) and near(z.X, 0))
+		-- Steep 45° plunge: downward Y, reduced horizontal, magnitude preserved
+		local steep = LaunchQuality.aimToVector({ height = 10, theta = 45, phi = 0 }, 21)
+		expect(steep.Y < 0, "steep launch must plunge")
+		expect(near(steep.Magnitude, 21), "speed must be preserved")
+		expect(steep.X < flat.X, "steeper = less carry")
+	end)
+	test("aim: seat defaults face the bowl centre", function()
+		local p1 = LaunchQuality.defaultAimFor(-1)
+		local p2 = LaunchQuality.defaultAimFor(1)
+		local v1 = LaunchQuality.aimToVector(p1, 21)
+		local v2 = LaunchQuality.aimToVector(p2, 21)
+		expect(v1.X > 0, "P1 spawns at -X and must aim +X")
+		expect(v2.X < 0, "P2 spawns at +X and must aim -X")
 	end)
 
 	print("──────── Persistence logic tests ────────")

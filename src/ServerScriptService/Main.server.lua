@@ -117,6 +117,11 @@ Remotes.RequestLaunch.OnServerEvent:Connect(function(player, sequenceId, launchD
     LaunchValidator.ValidateAndQueue(player, sequenceId, launchData)
 end)
 
+-- Launch ceremony: READY (with current aim sliders as the auto-launch fallback)
+Remotes.RequestReady.OnServerEvent:Connect(function(player, aim)
+    MatchManager.HandleReady(player, aim)
+end)
+
 -- Handle battle command requests from clients
 Remotes.RequestCommand.OnServerEvent:Connect(function(player, sequenceId, command)
     CommandValidator.ValidateAndQueue(player, sequenceId, command)

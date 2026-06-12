@@ -5,6 +5,7 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
 
@@ -135,62 +136,181 @@ activeCommandLabel.Text = ""
 activeCommandLabel.Visible = false
 activeCommandLabel.Parent = screenGui
 
--- ── Launch timing bar (Phase 2 skill layer) ───────────────────────────────────
--- Renders the shared LaunchQuality bar off the synced server clock. The server
--- grades presses with the same module — what you see is what gets judged.
+-- ── Match phase state (declared early: ceremony handlers close over these) ───
 
-local launchBarFrame = Instance.new("Frame")
-launchBarFrame.Name = "LaunchBar"
-launchBarFrame.Size = UDim2.fromOffset(420, 30)
-launchBarFrame.Position = UDim2.new(0.5, -210, 1, -190)
-launchBarFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
-launchBarFrame.BorderSizePixel = 0
-launchBarFrame.Visible = false
-launchBarFrame.Parent = screenGui
+local currentPhase = "None"
+local countdownEndTime = 0
 
-local launchBarCorner = Instance.new("UICorner")
-launchBarCorner.CornerRadius = UDim.new(0, 6)
-launchBarCorner.Parent = launchBarFrame
+-- ── Launch ceremony UI (Setup → READY → 3·2·1·GO → LAUNCH) ───────────────────
+-- Sliders submit ONLY numbers; the server clamps them and builds the vector.
 
--- Zone bands, sized from the same Constants the server grades with
-local goodBand = Instance.new("Frame")
-goodBand.Name = "GoodZone"
-goodBand.Size = UDim2.new(Constants.LaunchGoodZone * 2, 0, 1, 0)
-goodBand.Position = UDim2.new(0.5 - Constants.LaunchGoodZone, 0, 0, 0)
-goodBand.BackgroundColor3 = Color3.fromRGB(70, 110, 70)
-goodBand.BorderSizePixel = 0
-goodBand.Parent = launchBarFrame
+local setupPanel = Instance.new("Frame")
+setupPanel.Name = "SetupPanel"
+setupPanel.Size = UDim2.fromOffset(340, 190)
+setupPanel.Position = UDim2.new(0.5, -170, 1, -240)
+setupPanel.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+setupPanel.BackgroundTransparency = 0.15
+setupPanel.BorderSizePixel = 0
+setupPanel.Visible = false
+setupPanel.Parent = screenGui
+local setupCorner = Instance.new("UICorner")
+setupCorner.CornerRadius = UDim.new(0, 10)
+setupCorner.Parent = setupPanel
 
-local perfectBand = Instance.new("Frame")
-perfectBand.Name = "PerfectZone"
-perfectBand.Size = UDim2.new(Constants.LaunchPerfectZone * 2, 0, 1, 0)
-perfectBand.Position = UDim2.new(0.5 - Constants.LaunchPerfectZone, 0, 0, 0)
-perfectBand.BackgroundColor3 = Color3.fromRGB(120, 200, 90)
-perfectBand.BorderSizePixel = 0
-perfectBand.Parent = launchBarFrame
+local setupTitle = Instance.new("TextLabel")
+setupTitle.Size = UDim2.new(1, 0, 0, 22)
+setupTitle.BackgroundTransparency = 1
+setupTitle.Font = Enum.Font.GothamBold
+setupTitle.TextSize = 15
+setupTitle.TextColor3 = Color3.fromRGB(235, 235, 245)
+setupTitle.Text = "AIM YOUR LAUNCH"
+setupTitle.Parent = setupPanel
 
-local barMarker = Instance.new("Frame")
-barMarker.Name = "Marker"
-barMarker.Size = UDim2.new(0, 4, 1.4, 0)
-barMarker.AnchorPoint = Vector2.new(0.5, 0.5)
-barMarker.Position = UDim2.new(0, 0, 0.5, 0)
-barMarker.BackgroundColor3 = Color3.new(1, 1, 1)
-barMarker.BorderSizePixel = 0
-barMarker.ZIndex = 2
-barMarker.Parent = launchBarFrame
+local aim = { height = Constants.LaunchHeightDefault, theta = Constants.LaunchThetaMax, phi = 0 }
+local sliders = {}
 
-local launchHint = Instance.new("TextLabel")
-launchHint.Name = "LaunchHint"
-launchHint.Size = UDim2.fromOffset(420, 22)
-launchHint.Position = UDim2.new(0.5, -210, 1, -215)
-launchHint.BackgroundTransparency = 1
-launchHint.Font = Enum.Font.GothamBold
-launchHint.TextSize = 16
-launchHint.TextColor3 = Color3.fromRGB(235, 235, 235)
-launchHint.TextStrokeTransparency = 0
-launchHint.Text = "Press F to LAUNCH — hit the centre!"
-launchHint.Visible = false
-launchHint.Parent = screenGui
+local function makeSlider(order, label, key, min, max, fmt)
+	local row = Instance.new("Frame")
+	row.Size = UDim2.new(1, -20, 0, 30)
+	row.Position = UDim2.new(0, 10, 0, 22 + (order - 1) * 34)
+	row.BackgroundTransparency = 1
+	row.Parent = setupPanel
+
+	local caption = Instance.new("TextLabel")
+	caption.Size = UDim2.fromOffset(96, 30)
+	caption.BackgroundTransparency = 1
+	caption.Font = Enum.Font.Gotham
+	caption.TextSize = 13
+	caption.TextXAlignment = Enum.TextXAlignment.Left
+	caption.TextColor3 = Color3.fromRGB(200, 200, 215)
+	caption.Text = label
+	caption.Parent = row
+
+	local valueLabel = Instance.new("TextLabel")
+	valueLabel.Size = UDim2.fromOffset(54, 30)
+	valueLabel.Position = UDim2.new(1, -54, 0, 0)
+	valueLabel.BackgroundTransparency = 1
+	valueLabel.Font = Enum.Font.GothamBold
+	valueLabel.TextSize = 13
+	valueLabel.TextColor3 = Color3.fromRGB(255, 220, 130)
+	valueLabel.Parent = row
+
+	local bar = Instance.new("Frame")
+	bar.Name = "Bar"
+	bar.Size = UDim2.new(1, -160, 0, 8)
+	bar.Position = UDim2.new(0, 100, 0.5, -4)
+	bar.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+	bar.BorderSizePixel = 0
+	bar.Parent = row
+	local barCorner = Instance.new("UICorner")
+	barCorner.CornerRadius = UDim.new(1, 0)
+	barCorner.Parent = bar
+
+	local knob = Instance.new("Frame")
+	knob.Name = "Knob"
+	knob.Size = UDim2.fromOffset(16, 16)
+	knob.AnchorPoint = Vector2.new(0.5, 0.5)
+	knob.Position = UDim2.new(0, 0, 0.5, 0)
+	knob.BackgroundColor3 = Color3.fromRGB(235, 235, 245)
+	knob.BorderSizePixel = 0
+	knob.ZIndex = 2
+	knob.Parent = bar
+	local knobCorner = Instance.new("UICorner")
+	knobCorner.CornerRadius = UDim.new(1, 0)
+	knobCorner.Parent = knob
+
+	local function render()
+		local frac = (aim[key] - min) / (max - min)
+		knob.Position = UDim2.new(frac, 0, 0.5, 0)
+		valueLabel.Text = string.format(fmt, aim[key])
+	end
+
+	local dragging = false
+	local function applyFromX(x)
+		local frac = math.clamp((x - bar.AbsolutePosition.X) / math.max(1, bar.AbsoluteSize.X), 0, 1)
+		aim[key] = min + frac * (max - min)
+		render()
+	end
+	bar.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			applyFromX(input.Position.X)
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch) then
+			applyFromX(input.Position.X)
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+
+	sliders[key] = { render = render }
+	render()
+end
+
+makeSlider(1, "HEIGHT (studs)", "height", Constants.LaunchHeightMin, Constants.LaunchHeightMax, "%.1f")
+makeSlider(2, "ANGLE θ (flat 90°)", "theta", Constants.LaunchThetaMin, Constants.LaunchThetaMax, "%.0f°")
+makeSlider(3, "AIM φ (compass)", "phi", 0, 359, "%.0f°")
+
+local readyButton = Instance.new("TextButton")
+readyButton.Name = "ReadyButton"
+readyButton.Size = UDim2.fromOffset(140, 40)
+readyButton.Position = UDim2.new(0.5, -70, 1, -48)
+readyButton.BackgroundColor3 = Color3.fromRGB(70, 160, 90)
+readyButton.BorderSizePixel = 0
+readyButton.Font = Enum.Font.GothamBlack
+readyButton.TextSize = 18
+readyButton.TextColor3 = Color3.new(1, 1, 1)
+readyButton.Text = "READY"
+readyButton.Parent = setupPanel
+local readyCorner = Instance.new("UICorner")
+readyCorner.CornerRadius = UDim.new(0, 8)
+readyCorner.Parent = readyButton
+
+local readyStatusLabel = Instance.new("TextLabel")
+readyStatusLabel.Size = UDim2.new(1, 0, 0, 18)
+readyStatusLabel.Position = UDim2.new(0, 0, 1, -66)
+readyStatusLabel.BackgroundTransparency = 1
+readyStatusLabel.Font = Enum.Font.Gotham
+readyStatusLabel.TextSize = 12
+readyStatusLabel.TextColor3 = Color3.fromRGB(200, 200, 210)
+readyStatusLabel.Text = ""
+readyStatusLabel.Parent = setupPanel
+
+-- Big LAUNCH button (and F key): live from countdown start until consumed
+local launchButton = Instance.new("TextButton")
+launchButton.Name = "LaunchButton"
+launchButton.Size = UDim2.fromOffset(220, 64)
+launchButton.Position = UDim2.new(0.5, -110, 1, -200)
+launchButton.BackgroundColor3 = Color3.fromRGB(200, 60, 50)
+launchButton.BorderSizePixel = 0
+launchButton.Font = Enum.Font.GothamBlack
+launchButton.TextSize = 26
+launchButton.TextColor3 = Color3.new(1, 1, 1)
+launchButton.Text = "LAUNCH! (F)"
+launchButton.Visible = false
+launchButton.Parent = screenGui
+local launchCorner = Instance.new("UICorner")
+launchCorner.CornerRadius = UDim.new(0, 12)
+launchCorner.Parent = launchButton
+
+local gradeToast = Instance.new("TextLabel")
+gradeToast.Size = UDim2.new(1, 0, 0, 30)
+gradeToast.Position = UDim2.new(0, 0, 1, -240)
+gradeToast.BackgroundTransparency = 1
+gradeToast.Font = Enum.Font.GothamBold
+gradeToast.TextSize = 22
+gradeToast.TextStrokeTransparency = 0
+gradeToast.Text = ""
+gradeToast.Visible = false
+gradeToast.Parent = screenGui
 
 local GRADE_STYLES = {
 	Perfect = { text = "PERFECT LAUNCH!", color = Color3.fromRGB(120, 255, 120) },
@@ -198,33 +318,57 @@ local GRADE_STYLES = {
 	Poor    = { text = "Poor launch...",  color = Color3.fromRGB(230, 140, 90) },
 }
 
-local launchBarEpoch = 0
-local launchBarActive = false
+local setupDeadline = 0
+local isReady = false
 local hasLaunched = false
+local launchSequenceId = 0
 
-local function showLaunchGrade(quality)
+local function showLaunchGrade(quality, autoLaunched)
 	local style = GRADE_STYLES[quality]
 	if not style then return end
-	launchHint.Text = style.text
-	launchHint.TextColor3 = style.color
-	launchHint.Visible = true
-	task.delay(1.5, function()
-		if not launchBarActive then
-			launchHint.Visible = false
-		end
+	gradeToast.Text = autoLaunched and (style.text .. " (AUTO — you missed GO!)") or style.text
+	gradeToast.TextColor3 = style.color
+	gradeToast.Visible = true
+	task.delay(2, function()
+		gradeToast.Visible = false
 	end)
 end
 
-local function hideLaunchBar()
-	launchBarActive = false
-	launchBarFrame.Visible = false
+local function sendReady()
+	if isReady or currentPhase ~= "Setup" then return end
+	isReady = true
+	readyButton.Text = "READY ✓"
+	readyButton.BackgroundColor3 = Color3.fromRGB(60, 110, 70)
+	Remotes.RequestReady:FireServer({ height = aim.height, theta = aim.theta, phi = aim.phi })
 end
+readyButton.MouseButton1Click:Connect(sendReady)
+
+local function tryLaunch()
+	if hasLaunched then return end
+	if currentPhase ~= "Countdown" and currentPhase ~= "Active" then return end
+	hasLaunched = true
+	launchButton.Visible = false
+	launchSequenceId += 1
+	Remotes.RequestLaunch:FireServer(launchSequenceId, {
+		height = aim.height,
+		theta = aim.theta,
+		phi = aim.phi,
+		claimedServerTime = workspace:GetServerTimeNow(),
+	})
+end
+launchButton.MouseButton1Click:Connect(tryLaunch)
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	if input.KeyCode == Enum.KeyCode.F then
+		tryLaunch()
+	end
+end)
 
 -- ── Queue & rank panel (Phase 2) ──────────────────────────────────────────────
 
 local queuePanel = Instance.new("Frame")
 queuePanel.Name = "QueuePanel"
-queuePanel.Size = UDim2.fromOffset(190, 96)
+queuePanel.Size = UDim2.fromOffset(190, 126)
 queuePanel.Position = UDim2.new(1, -200, 0, 10)
 queuePanel.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
 queuePanel.BackgroundTransparency = 0.25
@@ -278,13 +422,6 @@ end
 local casualButton = makeQueueButton("CasualQueue", "CASUAL", 0, Color3.fromRGB(70, 120, 80))
 local rankedButton = makeQueueButton("RankedQueue", "RANKED", 95, Color3.fromRGB(140, 90, 50))
 
-casualButton.MouseButton1Click:Connect(function()
-	Remotes.RequestQueue:FireServer("Casual")
-end)
-rankedButton.MouseButton1Click:Connect(function()
-	Remotes.RequestQueue:FireServer("Ranked")
-end)
-
 -- ── Stadium preference (casual) — cycles Rotation → each ROTATION stadium ────
 
 local stadiumPref = nil -- nil = seeded rotation
@@ -304,7 +441,13 @@ local stadiumCorner = Instance.new("UICorner")
 stadiumCorner.CornerRadius = UDim.new(0, 6)
 stadiumCorner.Parent = stadiumButton
 stadiumButton.Parent = queuePanel
-queuePanel.Size = UDim2.fromOffset(190, 126)
+
+casualButton.MouseButton1Click:Connect(function()
+	Remotes.RequestQueue:FireServer("Casual", stadiumPref)
+end)
+rankedButton.MouseButton1Click:Connect(function()
+	Remotes.RequestQueue:FireServer("Ranked")
+end)
 
 stadiumButton.MouseButton1Click:Connect(function()
 	-- nil → ROTATION[1] → ROTATION[2] → ... → nil
@@ -422,10 +565,8 @@ Remotes.MmrUpdated.OnClientEvent:Connect(function(update)
 	end)
 end)
 
--- ── Match phase state ─────────────────────────────────────────────────────────
+-- ── Snapshot-driven prediction constants ──────────────────────────────────────
 
-local currentPhase = "None"
-local countdownEndTime = 0
 local TICK_SECONDS = 1 / Constants.SimulationTickRate
 
 -- Correct client prediction from server snapshots (handles rejected commands, latency races)
@@ -435,8 +576,8 @@ Remotes.StateSnapshot.OnClientEvent:Connect(function(snapshot)
 		for _, ev in ipairs(snapshot.events) do
 			if ev.eventType == "LaunchGraded" and ev.eventData.playerId == localPlayer.UserId then
 				hasLaunched = true
-				hideLaunchBar()
-				showLaunchGrade(ev.eventData.quality)
+				launchButton.Visible = false
+				showLaunchGrade(ev.eventData.quality, ev.eventData.autoLaunched)
 			end
 		end
 	end
@@ -477,22 +618,56 @@ Remotes.MatchStateChanged.OnClientEvent:Connect(function(phase, data)
 		stadiumRevealLabel.Visible = (phase ~= "Finished")
 	end
 
-	if phase == "Countdown" then
-		countdownEndTime = data.countdownEndTime
+	if phase == "Setup" then
+		setupDeadline = data.setupDeadline or setupDeadline
 		resultLabel.Visible = false
 		commandPanel.Visible = false
 		activeCommandLabel.Visible = false
-		-- Arm the launch bar for this match
-		launchBarEpoch = data.launchBarEpoch or 0
+		launchButton.Visible = false
 		hasLaunched = false
-		launchBarActive = true
-		launchBarFrame.Visible = true
-		launchHint.Text = "Press F to LAUNCH — hit the centre!"
-		launchHint.TextColor3 = Color3.fromRGB(235, 235, 235)
-		launchHint.Visible = true
+		-- Fresh match: re-arm READY and default the aim for our seat
+		if not (data.resync or data.ready) or not isReady then
+			if data.players then
+				for index, pid in ipairs(data.players) do
+					if pid == localPlayer.UserId then
+						local defaults = LaunchQuality.defaultAimFor(index == 1 and -1 or 1)
+						aim.height, aim.theta, aim.phi = defaults.height, defaults.theta, defaults.phi
+						for _, slider in pairs(sliders) do slider.render() end
+						break
+					end
+				end
+			end
+			isReady = false
+			readyButton.Text = "READY"
+			readyButton.BackgroundColor3 = Color3.fromRGB(70, 160, 90)
+		end
+		setupPanel.Visible = true
+		-- Opponent readiness ticks
+		if data.ready then
+			local others, readyCount = 0, 0
+			for _, pid in ipairs(data.players or {}) do
+				if pid ~= localPlayer.UserId then
+					others += 1
+					if data.ready[pid] then readyCount += 1 end
+				end
+			end
+			if others > 0 then
+				readyStatusLabel.Text = (readyCount >= others)
+					and "Opponent: READY ✓"
+					or "Waiting for opponent..."
+			end
+		end
+
+	elseif phase == "Countdown" then
+		countdownEndTime = data.countdownEndTime or countdownEndTime
+		setupPanel.Visible = false
+		resultLabel.Visible = false
+		commandPanel.Visible = false
+		activeCommandLabel.Visible = false
+		launchButton.Visible = not hasLaunched
 
 	elseif phase == "Active" then
-		statusLabel.Text = "BATTLE!"
+		statusLabel.Text = "GO!  SHOOT!"
 		commandPanel.Visible = true
 		activeCommandLabel.Visible = true
 		-- Reset local command prediction
@@ -509,8 +684,8 @@ Remotes.MatchStateChanged.OnClientEvent:Connect(function(phase, data)
 		statusLabel.Text = "MATCH FINISHED"
 		commandPanel.Visible = false
 		activeCommandLabel.Visible = false
-		hideLaunchBar()
-		launchHint.Visible = false
+		setupPanel.Visible = false
+		launchButton.Visible = false
 		resultLabel.Visible = true
 
 		local winnerId = data.winner
@@ -534,28 +709,21 @@ end)
 -- ── Per-frame update ──────────────────────────────────────────────────────────
 
 RunService.RenderStepped:Connect(function(dt)
-	-- Launch bar marker: same math the server grades with, same synced clock
-	if launchBarActive and not hasLaunched then
-		local now = workspace:GetServerTimeNow()
-		barMarker.Position = UDim2.new(LaunchQuality.barPosition(now, launchBarEpoch), 0, 0.5, 0)
-		-- Window closes shortly after Active begins; late launches grade Poor
-		if currentPhase == "Active" and countdownEndTime > 0
-			and now > countdownEndTime + Constants.LaunchWindowAfterActive then
-			hideLaunchBar()
-			launchHint.Text = "Launch window closed — late launch = Poor"
-			task.delay(2, function()
-				if not launchBarActive then launchHint.Visible = false end
-			end)
+	-- Setup: show the auto-ready countdown so nobody is surprised
+	if currentPhase == "Setup" and not isReady and setupDeadline > 0 then
+		local left = setupDeadline - workspace:GetServerTimeNow()
+		if left > 0 and left < 11 then
+			readyStatusLabel.Text = string.format("Auto-ready in %ds...", math.ceil(left))
 		end
 	end
 
-	-- Countdown text
+	-- Countdown: 3 · 2 · 1 · GO! SHOOT!
 	if currentPhase == "Countdown" then
 		local remaining = countdownEndTime - workspace:GetServerTimeNow()
 		if remaining > 0 then
-			statusLabel.Text = string.format("Match Starting In: %.1f", remaining)
+			statusLabel.Text = tostring(math.ceil(remaining))
 		else
-			statusLabel.Text = "READY..."
+			statusLabel.Text = "GO!  SHOOT!"
 		end
 	end
 
