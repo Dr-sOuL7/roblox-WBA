@@ -86,3 +86,23 @@ Fixes, each iterated against the harness:
   (timing bar replaces the free-timing prototype launch).
 * Commands are issuable before launching. Harmless now; folds into the Phase 2
   launch redesign.
+
+---
+
+# Stadium Gate Results (Phase 3)
+
+> Per-stadium ship gates at 1000 matches each (`stadium <id> 1000` runner mode /
+> `_G.RunStadiumGate(id)` in Studio). Bands identical to the Phase 1 gates.
+
+| Stadium | SpinOut/Wobble/RingOut | Avg duration | Collisions/match | Verdict |
+|---|---|---|---|---|
+| Classic (r20, R50, pull 7, launch ×1) | 50/33/17 | 20.6 s | 7.2 | SHIP (baseline) |
+| Compact (r17, R34, pull 8, launch ×0.85) | 43/35/21 | 20.0 s | 8.3 | SHIP — pressure/wobble texture |
+| Grand (r26, R95, pull 6, launch ×1.25) | 62/24/14 | 21.0 s | 5.3 | SHIP — spacing/endurance texture |
+
+Design law learned from the gate (now encoded in `Stadiums.lua` comments):
+**rim escape speed ≈ √(2·g·h) must sit just ABOVE `CollisionPushMax`** (21) —
+below it, plain hits eject from anywhere (gate showed 53–91% ring-outs);
+above it, ring-out pressure correctly attaches to attacker recoil and rim
+adjacency. Concepts the gate CUT: the extreme "deathpit" (constant contact
+structurally starves SpinOut below band — softened into the shipped Compact).

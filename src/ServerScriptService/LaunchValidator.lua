@@ -13,6 +13,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
 local LaunchQuality = require(ReplicatedStorage:WaitForChild("LaunchQuality"))
+local Stadiums = require(ReplicatedStorage:WaitForChild("Stadiums"))
 local TickManager = require(script.Parent:WaitForChild("TickManager"))
 
 -- Per-player remote rate limiting: max 1 accepted launch per match
@@ -88,7 +89,10 @@ function LaunchValidator.ValidateAndQueue(player, sequenceId, launchData)
 	end
 
 	local multiplier = LaunchQuality.multiplierFor(quality)
-	vector = vector * multiplier
+	-- Stadium launch scaling is spatial design (a tight pit takes gentler
+	-- entries); it scales translation only — spin is untouched
+	local stadium = Stadiums.get(matchState.stadiumId)
+	vector = vector * (multiplier * (stadium.launchSpeedScale or 1))
 	power = power * multiplier
 
 	if vector.Magnitude > Constants.VelocityClampMax then

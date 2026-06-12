@@ -24,6 +24,9 @@ local Stadiums = {}
 
 Stadiums.DEFAULT_ID = "Classic"
 
+-- Rim height h = R − √(R²−r²) sets the ring-out escape speed (≈ √(2·g·h)).
+-- Variants pair playableRadius with bowlSphereRadius to keep escape physics
+-- in a fair band while changing the SPACE the fight happens in.
 Stadiums.REGISTRY = {
 	Classic = {
 		id = "Classic",
@@ -34,11 +37,31 @@ Stadiums.REGISTRY = {
 		rimBuffer = Constants.BowlRimBuffer,           -- BeyRadius multiplier
 		bowlForce = Constants.BowlForce,               -- ambient centre pull
 	},
+	Compact = {
+		id = "Compact",
+		displayName = "Compact Pit",
+		description = "Tighter and meaner than Classic. Pressure arrives early.",
+		bowlSphereRadius = 34, -- rim height ≈ 4.6 at r=17 → escape ≈ 21.4, above the push cap (21): plain hits stay in, attacker recoil ejects
+		playableRadius = 17,
+		rimBuffer = Constants.BowlRimBuffer,
+		bowlForce = 8,
+		launchSpeedScale = 0.85, -- gentler entries for the shorter flight path
+	},
+	Grand = {
+		id = "Grand",
+		displayName = "Grand Coliseum",
+		description = "Wide and shallow-pulled. Spacing, chases, and patience win here.",
+		bowlSphereRadius = 95, -- shallow: rim height ≈ 3.6 at r=26 keeps the distant rim live
+		playableRadius = 26,
+		rimBuffer = Constants.BowlRimBuffer,
+		bowlForce = 6,
+		launchSpeedScale = 1.25, -- big space, big entries: keeps encounter rate (and wobble) up
+	},
 }
 
 -- Ranked/casual rotation pool. Entries must exist in REGISTRY and have
--- passed the per-stadium harness gate before shipping here.
-Stadiums.ROTATION = { "Classic" }
+-- passed the per-stadium harness gate (S0–S5) before shipping here.
+Stadiums.ROTATION = { "Classic", "Compact", "Grand" }
 
 function Stadiums.get(stadiumId)
 	return Stadiums.REGISTRY[stadiumId] or Stadiums.REGISTRY[Stadiums.DEFAULT_ID]

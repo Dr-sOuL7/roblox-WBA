@@ -190,7 +190,7 @@ function SimulationHarness.RunBatch(numMatches: number, options)
 			-- Mirrors MatchManager: spawn at half the playable radius (Classic: ±10)
 			b.position = Vector3.new(side * stadiumDef.playableRadius * 0.5, 10, 0)
 			if launchMode == "Launched" then
-				local speed = Constants.PrototypeLaunchSpeed * rng:NextNumber(0.9, 1.1)
+				local speed = Constants.PrototypeLaunchSpeed * (stadiumDef.launchSpeedScale or 1) * rng:NextNumber(0.9, 1.1)
 				local jitter = rng:NextNumber(-0.15, 0.15) -- radians around the centre aim
 				-- Timing-bar quality scales speed AND spin, exactly as the
 				-- LaunchValidator applies it live

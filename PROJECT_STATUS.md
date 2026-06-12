@@ -19,7 +19,7 @@ a published place, ~3 h total.
 | Stadium registry + data-driven generation | ✅ done — `Stadiums.lua`; physics resolves per-match stadium; Classic == validated baseline EXACTLY |
 | Per-stadium ship gate | ✅ done — `_G.RunStadiumGate(id)` / runner `stadium` mode; bands enforced before ROTATION |
 | Bey-variant decision documented and locked | ✅ done — `docs/ADR-002-bey-variants.md`: cosmetic-only, by constitution |
-| 3+ validated stadiums in rotation | ⬜ next cycle — design Compact/Grand variants, tune through the gate |
+| 3+ validated stadiums in rotation | ✅ done — Classic/Compact/Grand all SHIP at 1000-match gates; three distinct textures (see VALIDATION_BASELINE.md) |
 | Cosmetic skin system (+ neutrality audit) | ⬜ |
 | Stadium select (casual) / reveal (ranked) UI | ⬜ |
 
