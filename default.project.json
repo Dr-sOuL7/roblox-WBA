@@ -29,6 +29,9 @@
       "Stadiums": {
         "$path": "src/ReplicatedStorage/Stadiums.lua"
       },
+      "Cosmetics": {
+        "$path": "src/ReplicatedStorage/Cosmetics.lua"
+      },
       "Types": {
         "$path": "src/ReplicatedStorage/Types.lua"
       }

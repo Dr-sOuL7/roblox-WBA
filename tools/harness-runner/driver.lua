@@ -218,6 +218,81 @@ elseif mode == "persistence" then
 	local MatchQueue = require(__tokens["ServerScriptService/Matchmaking/MatchQueue"])
 
 	local Stadiums = require(__tokens["ReplicatedStorage/Stadiums"])
+	local Cosmetics = require(__tokens["ReplicatedStorage/Cosmetics"])
+
+	print("──────── Cosmetics registry tests ────────")
+
+	test("cosmetics: Default exists and every skin validates", function()
+		expect(Cosmetics.SKINS[Cosmetics.DEFAULT_SKIN] ~= nil)
+		for id, def in pairs(Cosmetics.SKINS) do
+			local ok, why = Cosmetics.validate(def)
+			expect(ok, id .. ": " .. tostring(why))
+			expect(def.id == id, id .. ": id field mismatch")
+		end
+	end)
+	test("cosmetics: unknown skin falls back to Default", function()
+		expect(Cosmetics.get("NotASkin").id == Cosmetics.DEFAULT_SKIN)
+		expect(Cosmetics.get(nil).id == Cosmetics.DEFAULT_SKIN)
+	end)
+	test("cosmetics: equip validation — starter vs unowned vs owned", function()
+		expect(Cosmetics.canEquip("Crimson", nil), "starter skin must equip")
+		expect(not Cosmetics.canEquip("NotASkin", nil), "unknown must not equip")
+		-- Simulate a future non-starter skin via ownership map semantics
+		expect(not Cosmetics.canEquip("NotASkin", { NotASkin = true }), "unknown stays unequippable even if 'owned'")
+	end)
+	test("cosmetics: ownedSkinIds returns sorted starter ∪ owned", function()
+		local ids = Cosmetics.ownedSkinIds(nil)
+		expect(#ids >= 6, "starter set missing")
+		for i = 2, #ids do
+			expect(ids[i - 1] < ids[i], "not sorted")
+		end
+	end)
+
+	print("──────── Cosmetic neutrality (by construction) ────────")
+
+	test("neutrality: identical seeds ± cosmetics → identical outcomes", function()
+		-- Guards the GDD §14 invariant: if anyone ever wires a cosmetic into
+		-- physics, this test breaks loudly.
+		require(__tokens["ServerScriptService/BeyController"])
+		require(__tokens["ServerScriptService/PhysicsController"])
+		require(__tokens["ServerScriptService/SpinEvaluator"])
+		local MatchState = require(__tokens["ReplicatedStorage/MatchState"])
+		local MatchInstance = require(__tokens["ServerScriptService/MatchInstance"])
+
+		local function runMatch(seed, withCosmetics)
+			local state = MatchState.new(seed)
+			state.matchId = "NeutralityTest"
+			state.phase = "Active"
+			state.isHeadless = true
+			state.playerOrder = { 101, 102 }
+			if withCosmetics then
+				state.cosmetics = { [101] = "Solar", [102] = "Void" }
+			end
+			local inst = MatchInstance.fromState(state)
+			local rng = inst.rng
+			for i, pid in ipairs(state.playerOrder) do
+				local side = (i == 1) and -1 or 1
+				local b = MatchState.createBeyState(pid)
+				b.position = Vector3.new(side * 10, 10, 0)
+				local speed = 21 * rng:NextNumber(0.9, 1.1)
+				local jitter = rng:NextNumber(-0.15, 0.15)
+				b.velocity = Vector3.new(-side * math.cos(jitter) * speed, 0, side * math.sin(jitter) * speed)
+				b.angularVelocity = Vector3.new(0, 100, 0)
+				b.previousPosition = b.position
+				state.beyStates[pid] = b
+			end
+			while state.phase ~= "Finished" and state.tickNumber < 5000 do
+				inst:StepTick(true)
+			end
+			return tostring(state.currentWinner) .. ":" .. tostring(state.tickNumber)
+		end
+
+		for seed = 1, 30 do
+			local bare = runMatch(seed * 7919, false)
+			local skinned = runMatch(seed * 7919, true)
+			expect(bare == skinned, string.format("seed %d diverged: %s vs %s", seed, bare, skinned))
+		end
+	end)
 
 	print("──────── Stadium registry tests ────────")
 

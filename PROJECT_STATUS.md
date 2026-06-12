@@ -6,7 +6,7 @@
 
 ## Phase
 
-**Phase 3 — Content Expansion: IN PROGRESS (director's call).**
+**Phase 3 — Content Expansion: engineering COMPLETE; validation pending (W-gates below + carried H/V debt).**
 
 Validation debt carried forward (release gates, unaffected by Phase 3 work):
 Phase 1 H1–H5 and Phase 2 V1–V6 (`VALIDATION_RUNBOOK.md`) — need 2 testers +
@@ -20,8 +20,8 @@ a published place, ~3 h total.
 | Per-stadium ship gate | ✅ done — `_G.RunStadiumGate(id)` / runner `stadium` mode; bands enforced before ROTATION |
 | Bey-variant decision documented and locked | ✅ done — `docs/ADR-002-bey-variants.md`: cosmetic-only, by constitution |
 | 3+ validated stadiums in rotation | ✅ done — Classic/Compact/Grand all SHIP at 1000-match gates; three distinct textures (see VALIDATION_BASELINE.md) |
-| Cosmetic skin system (+ neutrality audit) | ⬜ |
-| Stadium select (casual) / reveal (ranked) UI | ⬜ |
+| Cosmetic skin system (+ neutrality audit) | ✅ done — 6 starter skins, server-validated equip, team identity on blades; neutrality proven by construction (headless) + live audit (`_G.PrintNeutralityAudit()`) |
+| Stadium select (casual) / reveal (ranked) UI | ✅ done — casual preference (agreement/single-pref/rotation fallback), ranked rotation-only, reveal label |
 
 ### Phase 2 (engineering complete, validation pending)
 
@@ -99,7 +99,10 @@ stability→spin coupling (new, kills structural draws), ring-out grace 0.33→0
    persistence work does not affect them.
 2. **Run the Phase 2 V-gates** (V1–V6, runbook): persistence restart-survival,
    concurrent matches, ranked loop, reconnect, abandonment, queue edges.
-   Phase 2 engineering is COMPLETE; validation is what remains.
+3. **Run the Phase 3 W-gates** (W1–W3, runbook): stadium variety live check,
+   skin equip/persist/render, neutrality audit baseline.
+4. On all gates GREEN → Phase 4 (progression: XP/levels, soft currency,
+   unlocks — on the reserved schema fields).
 
 ## Known issues / debt (tracked, not blocking Phase 1)
 

@@ -9,6 +9,8 @@ local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
 
 local LaunchQuality = require(ReplicatedStorage:WaitForChild("LaunchQuality"))
+local Stadiums = require(ReplicatedStorage:WaitForChild("Stadiums"))
+local Cosmetics = require(ReplicatedStorage:WaitForChild("Cosmetics"))
 
 local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui")
@@ -283,6 +285,108 @@ rankedButton.MouseButton1Click:Connect(function()
 	Remotes.RequestQueue:FireServer("Ranked")
 end)
 
+-- ── Stadium preference (casual) — cycles Rotation → each ROTATION stadium ────
+
+local stadiumPref = nil -- nil = seeded rotation
+
+local stadiumButton = Instance.new("TextButton")
+stadiumButton.Name = "StadiumPref"
+stadiumButton.Size = UDim2.fromOffset(180, 24)
+stadiumButton.Position = UDim2.new(0, 5, 1, -28)
+stadiumButton.AnchorPoint = Vector2.new(0, 1)
+stadiumButton.BackgroundColor3 = Color3.fromRGB(55, 55, 75)
+stadiumButton.BorderSizePixel = 0
+stadiumButton.Font = Enum.Font.Gotham
+stadiumButton.TextSize = 12
+stadiumButton.TextColor3 = Color3.fromRGB(220, 220, 230)
+stadiumButton.Text = "Stadium: Rotation"
+local stadiumCorner = Instance.new("UICorner")
+stadiumCorner.CornerRadius = UDim.new(0, 6)
+stadiumCorner.Parent = stadiumButton
+stadiumButton.Parent = queuePanel
+queuePanel.Size = UDim2.fromOffset(190, 126)
+
+stadiumButton.MouseButton1Click:Connect(function()
+	-- nil → ROTATION[1] → ROTATION[2] → ... → nil
+	local idx = stadiumPref and table.find(Stadiums.ROTATION, stadiumPref) or 0
+	idx += 1
+	stadiumPref = Stadiums.ROTATION[idx] -- past the end → nil → Rotation
+	stadiumButton.Text = "Stadium: "
+		.. (stadiumPref and Stadiums.get(stadiumPref).displayName or "Rotation")
+	-- Re-assert the casual queue with the new preference (server validates;
+	-- ranked ignores preferences entirely)
+	Remotes.RequestQueue:FireServer("Casual", stadiumPref)
+end)
+
+-- ── Skin equip panel ──────────────────────────────────────────────────────────
+
+local skinPanel = Instance.new("Frame")
+skinPanel.Name = "SkinPanel"
+skinPanel.Size = UDim2.fromOffset(190, 46)
+skinPanel.Position = UDim2.new(1, -200, 0, 142)
+skinPanel.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+skinPanel.BackgroundTransparency = 0.25
+skinPanel.BorderSizePixel = 0
+skinPanel.Parent = screenGui
+local skinCorner = Instance.new("UICorner")
+skinCorner.CornerRadius = UDim.new(0, 8)
+skinCorner.Parent = skinPanel
+
+local skinTitle = Instance.new("TextLabel")
+skinTitle.Size = UDim2.new(1, -10, 0, 14)
+skinTitle.Position = UDim2.new(0, 5, 0, 2)
+skinTitle.BackgroundTransparency = 1
+skinTitle.Font = Enum.Font.Gotham
+skinTitle.TextSize = 11
+skinTitle.TextColor3 = Color3.fromRGB(200, 200, 210)
+skinTitle.TextXAlignment = Enum.TextXAlignment.Left
+skinTitle.Text = "SKIN (cosmetic only)"
+skinTitle.Parent = skinPanel
+
+local swatchRow = Instance.new("Frame")
+swatchRow.Size = UDim2.new(1, -10, 0, 24)
+swatchRow.Position = UDim2.new(0, 5, 0, 18)
+swatchRow.BackgroundTransparency = 1
+swatchRow.Parent = skinPanel
+local rowLayout = Instance.new("UIListLayout")
+rowLayout.FillDirection = Enum.FillDirection.Horizontal
+rowLayout.Padding = UDim.new(0, 4)
+rowLayout.Parent = swatchRow
+
+local skinSwatches = {} -- skinId -> button
+local equippedSkin = "Default"
+
+local function refreshSwatchSelection()
+	for id, btn in pairs(skinSwatches) do
+		btn.BorderSizePixel = (id == equippedSkin) and 2 or 0
+		btn.BackgroundTransparency = (id == equippedSkin) and 0 or 0.35
+	end
+end
+
+local function buildSwatches(ownedIds)
+	for _, btn in pairs(skinSwatches) do
+		btn:Destroy()
+	end
+	table.clear(skinSwatches)
+	for _, skinId in ipairs(ownedIds) do
+		local def = Cosmetics.get(skinId)
+		local btn = Instance.new("TextButton")
+		btn.Name = skinId
+		btn.Size = UDim2.fromOffset(24, 24)
+		btn.BackgroundColor3 = def.ringColor
+		btn.BorderColor3 = Color3.new(1, 1, 1)
+		btn.Text = ""
+		btn.Parent = swatchRow
+		btn.MouseButton1Click:Connect(function()
+			Remotes.RequestEquip:FireServer(skinId)
+		end)
+		skinSwatches[skinId] = btn
+	end
+	refreshSwatchSelection()
+end
+
+buildSwatches(Cosmetics.ownedSkinIds(nil)) -- starter set until the profile arrives
+
 Remotes.QueueStatus.OnClientEvent:Connect(function(status)
 	if status.state == "Queued" then
 		queueStateLabel.Text = "Queue: " .. status.mode .. " (searching...)"
@@ -297,6 +401,14 @@ end)
 
 Remotes.ProfileSummary.OnClientEvent:Connect(function(summary)
 	rankLabel.Text = string.format("%s · %d MMR", summary.tier, summary.mmr)
+	if summary.equippedSkin then
+		equippedSkin = summary.equippedSkin
+	end
+	if summary.ownedSkins then
+		buildSwatches(summary.ownedSkins)
+	else
+		refreshSwatchSelection()
+	end
 end)
 
 Remotes.MmrUpdated.OnClientEvent:Connect(function(update)
@@ -344,8 +456,26 @@ Remotes.StateSnapshot.OnClientEvent:Connect(function(snapshot)
 	end
 end)
 
+-- Stadium reveal (ranked rotation surprise / casual confirmation)
+local stadiumRevealLabel = Instance.new("TextLabel")
+stadiumRevealLabel.Name = "StadiumReveal"
+stadiumRevealLabel.Size = UDim2.new(1, 0, 0, 24)
+stadiumRevealLabel.Position = UDim2.new(0, 0, 0, 148)
+stadiumRevealLabel.BackgroundTransparency = 1
+stadiumRevealLabel.Font = Enum.Font.Gotham
+stadiumRevealLabel.TextSize = 18
+stadiumRevealLabel.TextColor3 = Color3.fromRGB(180, 200, 255)
+stadiumRevealLabel.TextStrokeTransparency = 0
+stadiumRevealLabel.Text = ""
+stadiumRevealLabel.Parent = screenGui
+
 Remotes.MatchStateChanged.OnClientEvent:Connect(function(phase, data)
 	currentPhase = phase
+
+	if data and data.stadiumId then
+		stadiumRevealLabel.Text = "⚔ " .. Stadiums.get(data.stadiumId).displayName
+		stadiumRevealLabel.Visible = (phase ~= "Finished")
+	end
 
 	if phase == "Countdown" then
 		countdownEndTime = data.countdownEndTime

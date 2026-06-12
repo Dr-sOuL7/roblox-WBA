@@ -12,8 +12,10 @@ local Players = game:GetService("Players")
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
 local MatchState = require(ReplicatedStorage:WaitForChild("MatchState"))
 local Stadiums = require(ReplicatedStorage:WaitForChild("Stadiums"))
+local Cosmetics = require(ReplicatedStorage:WaitForChild("Cosmetics"))
 local TickManager = require(script.Parent:WaitForChild("TickManager"))
 local MatchInstance = require(script.Parent:WaitForChild("MatchInstance"))
+local ProfileStore = require(script.Parent:WaitForChild("Persistence"):WaitForChild("ProfileStore"))
 
 local MatchManager = {}
 
@@ -130,8 +132,10 @@ end
 
 -- ── Bey models ────────────────────────────────────────────────────────────────
 
--- Create a highly visible multi-part Prototype Bey model at the arena origin
-local function createPrototypeBeyModel(playerId: number, isPlayer1: boolean, parentFolder, origin)
+-- Create a highly visible multi-part Prototype Bey model at the arena origin.
+-- Skin colors are COSMETIC ONLY (ring/disc/bit); team identity lives on the
+-- blades (P1 red / P2 blue) so skins never blur whose Bey is whose.
+local function createPrototypeBeyModel(playerId: number, isPlayer1: boolean, parentFolder, origin, skinDef)
 	local model = Instance.new("Model")
 	model.Name = "Bey_" .. tostring(playerId)
 
@@ -146,7 +150,7 @@ local function createPrototypeBeyModel(playerId: number, isPlayer1: boolean, par
 	pivot.Parent = model
 	model.PrimaryPart = pivot
 
-	local beyColor = isPlayer1 and Color3.fromRGB(255, 50, 50) or Color3.fromRGB(50, 120, 255)
+	local teamColor = isPlayer1 and Color3.fromRGB(255, 50, 50) or Color3.fromRGB(50, 120, 255)
 
 	-- 2. Driver (Tip)
 	local driver = Instance.new("Part")
@@ -165,7 +169,7 @@ local function createPrototypeBeyModel(playerId: number, isPlayer1: boolean, par
 	disc.Size = Vector3.new(0.8, 3.5, 3.5)
 	disc.Shape = Enum.PartType.Cylinder
 	disc.CFrame = pivot.CFrame * CFrame.new(0, 1.9, 0) * CFrame.Angles(0, 0, math.rad(90))
-	disc.Color = Color3.fromRGB(150, 160, 170)
+	disc.Color = skinDef.discColor
 	disc.Material = Enum.Material.Metal
 	disc.Anchored = true
 	disc.CanCollide = false
@@ -177,7 +181,7 @@ local function createPrototypeBeyModel(playerId: number, isPlayer1: boolean, par
 	ring.Size = Vector3.new(1.2, 5.0, 5.0)
 	ring.Shape = Enum.PartType.Cylinder
 	ring.CFrame = pivot.CFrame * CFrame.new(0, 2.9, 0) * CFrame.Angles(0, 0, math.rad(90))
-	ring.Color = beyColor
+	ring.Color = skinDef.ringColor
 	ring.Material = Enum.Material.SmoothPlastic
 	ring.Anchored = true
 	ring.CanCollide = false
@@ -188,7 +192,7 @@ local function createPrototypeBeyModel(playerId: number, isPlayer1: boolean, par
 		local blade = Instance.new("Part")
 		blade.Name = "Blade_" .. i
 		blade.Size = Vector3.new(1.2, 2.0, 2.5)
-		blade.Color = Color3.fromRGB(255, 255, 0) -- Bright Yellow
+		blade.Color = teamColor -- team identity channel (P1 red / P2 blue)
 		blade.Anchored = true
 		blade.CanCollide = false
 		blade.CFrame = pivot.CFrame
@@ -204,7 +208,7 @@ local function createPrototypeBeyModel(playerId: number, isPlayer1: boolean, par
 	bit.Size = Vector3.new(0.2, 2.0, 2.0)
 	bit.Shape = Enum.PartType.Cylinder
 	bit.CFrame = pivot.CFrame * CFrame.new(0, 3.6, 0) * CFrame.Angles(0, 0, math.rad(90))
-	bit.Color = Color3.fromRGB(255, 255, 255)
+	bit.Color = skinDef.bitColor
 	bit.Material = Enum.Material.Neon
 	bit.Anchored = true
 	bit.CanCollide = false
@@ -294,6 +298,16 @@ function MatchManager.StartNewMatch(playerIds, options)
 
 	spawnStadium(stadiumDef, folder, origin) -- may yield once per stadium (template CSG build)
 
+	-- Equipped skins, resolved once at match start (mid-match equips are
+	-- rejected). COSMETIC ONLY: this map never enters beyStates/physics —
+	-- the headless suite proves outcomes are identical with or without it.
+	newState.cosmetics = {}
+	for _, pid in ipairs(playerIds) do
+		local profile = ProfileStore.GetProfile(pid)
+		local skinId = profile and profile.equippedCosmetics and profile.equippedCosmetics.skin
+		newState.cosmetics[pid] = Cosmetics.get(skinId).id
+	end
+
 	-- Mirrored spawns at half the playable radius — scales with the stadium
 	-- (Classic: ±10, identical to the validated baseline)
 	local spawnRadius = stadiumDef.playableRadius * 0.5
@@ -313,7 +327,7 @@ function MatchManager.StartNewMatch(playerIds, options)
 		bState.previousPosition = bState.position
 		newState.beyStates[pid] = bState
 
-		createPrototypeBeyModel(pid, i == 1, folder, origin)
+		createPrototypeBeyModel(pid, i == 1, folder, origin, Cosmetics.get(newState.cosmetics[pid]))
 	end
 
 	local instance = MatchInstance.fromState(newState, slot, origin)

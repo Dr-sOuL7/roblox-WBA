@@ -135,6 +135,34 @@ matches stable.
 
 ---
 
+# Phase 3 Validation (W-gates)
+
+Automated prerequisites already pass headless: per-stadium ship gates at 1000
+matches each (Classic/Compact/Grand — `VALIDATION_BASELINE.md`), cosmetic
+neutrality by construction (identical seeds ± skins → identical outcomes).
+
+## Gate W1 — Stadium variety, live
+Play 2+ matches in each stadium (casual select button cycles preference).
+PASS: each arena renders correctly (size/curvature visibly different, camera
+frames each), matches feel distinct (Compact = pressure, Grand = spacing),
+stadium reveal label correct, ranked ignores the casual preference.
+
+## Gate W2 — Skins
+Each tester equips a different skin (swatch panel, top right). PASS: both
+clients render both skins correctly mid-match; team blades stay red/blue and
+"whose Bey is whose" is never ambiguous (re-ask the H2 questions once);
+equip persists across rejoin; equip is rejected mid-match; the unknown-skin
+path falls back to Factory Steel.
+
+## Gate W3 — Neutrality audit mechanism
+After the session, run `_G.PrintNeutralityAudit()` in the server console.
+PASS: every skin worn this session appears with picks/decided/win-rate, and
+the report flags nothing (small samples print as within tolerance). This
+gate validates the MECHANISM; statistical power arrives with population
+(Phase 8 promotes the audit to persisted analytics and a release gate).
+
+---
+
 ## On failure
 
 Tune only the live dials (`Constants.lua`: command uptime, ring-out grace,

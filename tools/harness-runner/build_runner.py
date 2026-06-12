@@ -28,6 +28,7 @@ MODULES = [
     ("ReplicatedStorage/MatchState", "src/ReplicatedStorage/MatchState.lua"),
     ("ReplicatedStorage/LaunchQuality", "src/ReplicatedStorage/LaunchQuality.lua"),
     ("ReplicatedStorage/Stadiums", "src/ReplicatedStorage/Stadiums.lua"),
+    ("ReplicatedStorage/Cosmetics", "src/ReplicatedStorage/Cosmetics.lua"),
     ("ServerScriptService/TickManager", "src/ServerScriptService/TickManager.lua"),
     ("ServerScriptService/MatchInstance", "src/ServerScriptService/MatchInstance.lua"),
     ("ServerScriptService/CollisionClassifier", "src/ServerScriptService/CollisionClassifier.lua"),

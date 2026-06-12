@@ -47,7 +47,7 @@ function ProfileSchema.defaults()
 
 		-- Phase 3/4 reservations
 		ownedCosmetics = {},
-		equippedCosmetics = {},
+		equippedCosmetics = { skin = "Default" },
 
 		settings = {},
 	}

@@ -35,11 +35,11 @@ function MatchQueue:size(): number
 	return #self._entries
 end
 
-function MatchQueue:join(userId, mmr: number, now: number): boolean
+function MatchQueue:join(userId, mmr: number, now: number, meta): boolean
 	if self._byUser[userId] then
 		return false
 	end
-	local entry = { userId = userId, mmr = mmr, joinedAt = now }
+	local entry = { userId = userId, mmr = mmr, joinedAt = now, meta = meta }
 	table.insert(self._entries, entry)
 	self._byUser[userId] = entry
 	return true

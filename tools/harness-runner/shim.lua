@@ -92,6 +92,26 @@ do
 	Vector3.one = new(1, 1, 1)
 end
 
+-- ── Color3 (minimal: registries store colors; headless code never reads them) ─
+
+local Color3 = {}
+do
+	local mt = {
+		__eq = function(a, b)
+			return a.R == b.R and a.G == b.G and a.B == b.B
+		end,
+		__tostring = function(c)
+			return string.format("%g, %g, %g", c.R, c.G, c.B)
+		end,
+	}
+	function Color3.new(r, g, b)
+		return setmetatable({ R = r or 0, G = g or 0, B = b or 0 }, mt)
+	end
+	function Color3.fromRGB(r, g, b)
+		return Color3.new((r or 0) / 255, (g or 0) / 255, (b or 0) / 255)
+	end
+end
+
 -- ── Random (xorshift32) ───────────────────────────────────────────────────────
 
 local Random = {}
@@ -244,4 +264,4 @@ local game = {
 }
 
 -- Keep linters quiet about intentionally unused shim globals
-local _ = { warn, Vector3, Random, workspace, task, game, require, __defs, __registerToken }
+local _ = { warn, Vector3, Color3, Random, workspace, task, game, require, __defs, __registerToken }

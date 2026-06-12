@@ -19,6 +19,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 
 local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
+local Stadiums = require(ReplicatedStorage:WaitForChild("Stadiums"))
+local Cosmetics = require(ReplicatedStorage:WaitForChild("Cosmetics"))
 local MmrLogic = require(script.Parent:WaitForChild("MmrLogic"))
 local MatchQueue = require(script.Parent:WaitForChild("MatchQueue"))
 local MatchManager = require(script.Parent.Parent:WaitForChild("MatchManager"))
@@ -55,6 +57,8 @@ local function pushProfileSummary(userId)
 			rankedLosses = profile.rankedLosses,
 			wins = profile.stats.wins,
 			losses = profile.stats.losses,
+			equippedSkin = Cosmetics.get(profile.equippedCosmetics and profile.equippedCosmetics.skin).id,
+			ownedSkins = Cosmetics.ownedSkinIds(profile.ownedCosmetics),
 		})
 	end
 end
@@ -62,10 +66,19 @@ MatchmakingService.PushProfileSummary = pushProfileSummary
 
 -- ── Queue membership ──────────────────────────────────────────────────────────
 
-function MatchmakingService.JoinQueue(userId, mode: string): (boolean, string?)
+--[=[
+	stadiumPref (casual only): a ROTATION stadium id, or nil for seeded
+	rotation. Ranked always uses rotation — no pick advantage (plan §8).
+]=]
+function MatchmakingService.JoinQueue(userId, mode: string, stadiumPref: string?): (boolean, string?)
 	local queue = _queues[mode]
 	if not queue then
 		return false, "unknown-mode"
+	end
+	if stadiumPref ~= nil then
+		if mode ~= "Casual" or not table.find(Stadiums.ROTATION, stadiumPref) then
+			stadiumPref = nil
+		end
 	end
 	if TickManager.GetInstanceForPlayer(userId) then
 		return false, "in-match"
@@ -82,7 +95,7 @@ function MatchmakingService.JoinQueue(userId, mode: string): (boolean, string?)
 		end
 	end
 
-	local joined = queue:join(userId, profile.mmr, os.clock())
+	local joined = queue:join(userId, profile.mmr, os.clock(), { stadiumPref = stadiumPref })
 	if joined then
 		pushQueueStatus(userId, { state = "Queued", mode = mode })
 	end
@@ -103,13 +116,14 @@ function MatchmakingService.LeaveAllQueues(userId, silent: boolean?)
 end
 
 -- Remote: client asks to join "Ranked"/"Casual" or "Leave"
-Remotes.RequestQueue.OnServerEvent:Connect(function(player, mode)
+Remotes.RequestQueue.OnServerEvent:Connect(function(player, mode, stadiumPref)
 	if mode == "Leave" then
 		MatchmakingService.LeaveAllQueues(player.UserId)
 		return
 	end
 	if mode == "Ranked" or mode == "Casual" then
-		local ok, reason = MatchmakingService.JoinQueue(player.UserId, mode)
+		local ok, reason = MatchmakingService.JoinQueue(player.UserId, mode,
+			type(stadiumPref) == "string" and stadiumPref or nil)
 		if not ok and reason then
 			pushQueueStatus(player.UserId, { state = "Rejected", reason = reason })
 		end
@@ -126,9 +140,26 @@ local function rankedMatchesPlayed(profile)
 	return profile.rankedWins + profile.rankedLosses + (profile.rankedDraws or 0)
 end
 
+-- Casual stadium choice: agreement wins; one preference wins over none;
+-- conflicting preferences fall back to seeded rotation (fair, deterministic).
+local function chooseStadium(mode, pair)
+	if mode ~= "Casual" then
+		return nil -- ranked: seeded rotation, no pick advantage
+	end
+	local prefA = pair.a.meta and pair.a.meta.stadiumPref
+	local prefB = pair.b.meta and pair.b.meta.stadiumPref
+	if prefA and prefB then
+		return (prefA == prefB) and prefA or nil
+	end
+	return prefA or prefB
+end
+
 local function startPair(mode, pair)
 	local party = { pair.a.userId, pair.b.userId }
-	local instance = MatchManager.StartNewMatch(party, { queueMode = mode })
+	local instance = MatchManager.StartNewMatch(party, {
+		queueMode = mode,
+		stadiumId = chooseStadium(mode, pair),
+	})
 	if instance then
 		if mode == "Ranked" then
 			-- Snapshot ratings at match start: the finish-time rating math
@@ -149,8 +180,8 @@ local function startPair(mode, pair)
 	end
 	-- No free slot: requeue with original wait times so tolerance keeps widening
 	local queue = _queues[mode]
-	queue:join(pair.a.userId, pair.a.mmr, pair.a.joinedAt)
-	queue:join(pair.b.userId, pair.b.mmr, pair.b.joinedAt)
+	queue:join(pair.a.userId, pair.a.mmr, pair.a.joinedAt, pair.a.meta)
+	queue:join(pair.b.userId, pair.b.mmr, pair.b.joinedAt, pair.b.meta)
 	return false
 end
 
@@ -175,11 +206,14 @@ task.spawn(function()
 			if (now - entry.joinedAt) >= SOLO_PRACTICE_WAIT then
 				casual:leave(entry.userId)
 				print("Server: Starting solo practice match.")
-				local instance = MatchManager.StartNewMatch({ entry.userId }, { queueMode = "Casual" })
+				local instance = MatchManager.StartNewMatch({ entry.userId }, {
+					queueMode = "Casual",
+					stadiumId = entry.meta and entry.meta.stadiumPref or nil,
+				})
 				if instance then
 					pushQueueStatus(entry.userId, { state = "Matched", mode = "Casual" })
 				else
-					casual:join(entry.userId, entry.mmr, entry.joinedAt)
+					casual:join(entry.userId, entry.mmr, entry.joinedAt, entry.meta)
 				end
 			end
 		end

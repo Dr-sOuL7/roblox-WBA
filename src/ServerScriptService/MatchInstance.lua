@@ -42,6 +42,7 @@ function MatchInstance:BroadcastPhase(payload, onlyUserId)
 	payload.matchId = self.state.matchId
 	payload.arenaOrigin = self.arenaOrigin
 	payload.stadiumId = self.state.stadiumId
+	payload.cosmetics = self.state.cosmetics
 	for _, pid in ipairs(self.state.playerOrder) do
 		if onlyUserId and pid ~= onlyUserId then continue end
 		local player = Players:GetPlayerByUserId(pid)

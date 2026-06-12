@@ -53,6 +53,9 @@ require(PersistenceFolder:WaitForChild("StatsRecorder"))
 local MatchmakingFolder = script.Parent:WaitForChild("Matchmaking")
 local MatchmakingService = require(MatchmakingFolder:WaitForChild("MatchmakingService"))
 
+-- Cosmetics (Phase 3): equip validation + win-rate-neutrality audit
+require(script.Parent:WaitForChild("CosmeticsService"))
+
 -- HEADLESS MODE: only runs in Studio when explicitly set to true.
 -- NEVER ship with this enabled — live players will never get a match.
 local HEADLESS_MODE = false and RunService:IsStudio()
