@@ -52,6 +52,15 @@ function HubService.BuildHub()
 	_built = true
 	local folder = getHubFolder()
 
+	-- Remove any pre-existing spawn (the default place's baseplate
+	-- SpawnLocation, which lives in the .rbxl and not in the Rojo source) so
+	-- characters only ever spawn at the hub.
+	for _, inst in ipairs(workspace:GetDescendants()) do
+		if inst:IsA("SpawnLocation") then
+			inst:Destroy()
+		end
+	end
+
 	local platform = Instance.new("Part")
 	platform.Name = "HubPlatform"
 	platform.Anchored = true
