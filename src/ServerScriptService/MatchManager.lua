@@ -42,6 +42,14 @@ function MatchManager.OnMatchFinished(callback)
 	table.insert(_onMatchFinishedListeners, callback)
 end
 
+-- Fires with playerIds when a match starts (any entry path). Used by
+-- matchmaking to drop participants from queues so a queued player who entered
+-- a match another way (e.g. a proximity challenge) is never double-matched.
+local _onMatchStartedListeners = {}
+function MatchManager.OnMatchStarted(callback)
+	table.insert(_onMatchStartedListeners, callback)
+end
+
 -- ── Workspace helpers ─────────────────────────────────────────────────────────
 
 local function getMatchesFolder()
@@ -396,11 +404,29 @@ function MatchManager.StartNewMatch(playerIds, options)
 
 	setMatchFocus(playerIds, focusPart)
 
+	-- Despawn hub characters: from here only the Beys remain, which the
+	-- players control. Covers EVERY entry path (challenge, bot, ranked queue).
+	-- Players respawn in the hub when the match is cleaned up.
+	for _, pid in ipairs(playerIds) do
+		local player = Players:GetPlayerByUserId(pid)
+		if player and player.Character then
+			player.Character:Destroy()
+			player.Character = nil
+		end
+	end
+
 	local instance = MatchInstance.fromState(newState, slot, origin)
 	instance.folder = folder
 	_slots[slot] = instance
 
 	TickManager.RegisterInstance(instance)
+
+	for _, listener in ipairs(_onMatchStartedListeners) do
+		local ok, err = pcall(listener, playerIds)
+		if not ok then
+			warn("[MatchManager] OnMatchStarted listener error: " .. tostring(err))
+		end
+	end
 
 	-- Broadcast match start (Setup phase) to participants
 	instance:BroadcastPhase({
@@ -566,7 +592,13 @@ function MatchManager.HandlePlayerReturned(userId): boolean
 	end
 
 	print(string.format("[Match] Player %d reconnected to %s — resyncing", userId, state.matchId))
-	instance:ResyncPlayer(userId)
+	-- Defer so the rejoining client's MatchStateChanged listener (and battle
+	-- camera) are connected before the resync arrives.
+	task.delay(1, function()
+		if TickManager.GetInstanceForPlayer(userId) == instance and state.phase ~= "Finished" then
+			instance:ResyncPlayer(userId)
+		end
+	end)
 	return true
 end
 

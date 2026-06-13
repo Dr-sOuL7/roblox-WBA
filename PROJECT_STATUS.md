@@ -20,6 +20,20 @@ else Poor); missed clicks auto-launch Poor 2 s after GO. Client submits only
 slider numbers — the server clamps and builds all vectors (anti-cheat
 strictly tightened). H-gate scripts updated in the runbook.
 
+### Hub challenge flow (director redesign of match entry)
+
+Players now spawn as walking CHARACTERS in a social hub (HubService) instead
+of auto-queueing. Walk up to another player → a "Challenge" ProximityPrompt
+→ invite → Accept → both characters despawn and the validated battle begins
+(ChallengeService). A standing PRACTICE BOT dummy in the hub gives solo
+players an opponent. Camera follows the character in the hub and locks
+isometric during battle; players respawn in the hub after each match.
+Character despawn is centralized in StartNewMatch (covers every entry path);
+a new OnMatchStarted hook drops participants from queues so no one is
+double-matched. The simulation is untouched — harness stays GREEN (49/49,
+GO). NOTE: this layer (characters/ProximityPrompts/camera) is pure Roblox
+runtime and needs live Studio verification (Gate H0 added to the runbook).
+
 ### Post-Phase-3 director features & live-test fixes
 
 - **BOT opponent for solo players** (`BotController.lua`): a lone casual

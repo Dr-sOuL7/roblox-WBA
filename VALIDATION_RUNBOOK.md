@@ -14,10 +14,12 @@ Hardware: 2 desktop testers (mouse/keyboard). Build: sync with Rojo
 1. Open the place, **Play Solo**. Confirm:
    - Camera frames the whole bowl from the isometric angle and never snaps away
      (no character spawns — this is intended).
-   - A practice match **vs the BOT** starts after ~6–8 s (matchmaking
-     auto-queues you into Casual; a lone player gets the AI opponent). You
-     should see TWO Beys — yours and the bot's — and real clashes. The bot
-     readies itself ~1.5 s in, launches near GO, and uses A/D/E commands.
+   - **Hub:** you spawn as a walking CHARACTER on the hub platform (normal
+     follow camera, WASD to move). A "PRACTICE BOT" dummy stands nearby.
+   - **Challenge the bot:** walk up to the dummy → a "Challenge" prompt
+     appears → press it. Your character vanishes, the camera locks isometric
+     on an arena, and the launch ceremony begins (vs the AI). You should see
+     TWO Beys clash. After the match you respawn back on the hub platform.
    - If the world is invisible while UI works: the place must have
      StreamingEnabled OFF (synced via default.project.json) — re-sync Rojo
      and check the client console for "[Renderer] Bey model ... not
@@ -37,14 +39,24 @@ Hardware: 2 desktop testers (mouse/keyboard). Build: sync with Rojo
 2. Command bar: `_G.RunValidationSuite()` → expect GO with numbers near the
    baseline doc (sampling noise is fine).
 
-## Gate H1 — Live match loop (2 testers, Studio "Start Server + 2 Players")
+## Gate H0 — Hub challenge flow (2 testers, Studio "Start Server + 2 Players")
 
-10 consecutive matches without restart. Every match must: enter Setup (both
+Both spawn as characters on the hub platform. Tester A walks up to tester B,
+triggers the "Challenge" prompt. B sees an "A challenges you" invite with
+Accept/Decline + countdown. On Accept: both characters vanish, both cameras
+lock on the same arena, the launch ceremony begins. On match end: both
+respawn on the hub. PASS: invite delivery, accept→battle, decline→toast,
+15 s timeout→expire, and you cannot challenge yourself (no prompt on your
+own character).
+
+## Gate H1 — Live match loop (2 testers, via hub challenge)
+
+10 consecutive challenge→battle rounds. Every match must: enter Setup (both
 see the aim panel), proceed on both READY clicks (also test the 30 s
 auto-ready once by not clicking), count down 3·2·1·GO on both screens,
 grade both launches, accept commands from both seats, finish with a correct
-winner/draw screen on **both** clients, and auto-rematch. Any stall,
-wrong-winner, or desync = FAIL → file, fix, restart the count.
+winner/draw screen on **both** clients, and return both to the hub. Any
+stall, wrong-winner, or desync = FAIL → file, fix, restart the count.
 
 ## Gate H2 — Readability baseline (during H1's 10 matches)
 

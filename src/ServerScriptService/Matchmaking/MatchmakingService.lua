@@ -135,6 +135,14 @@ Players.PlayerRemoving:Connect(function(player)
 	MatchmakingService.LeaveAllQueues(player.UserId, true)
 end)
 
+-- A match starting (via ANY entry path — challenge, bot, queue) drops its
+-- participants from the queues so they can't be double-matched.
+MatchManager.OnMatchStarted(function(playerIds)
+	for _, pid in ipairs(playerIds) do
+		MatchmakingService.LeaveAllQueues(pid, true)
+	end
+end)
+
 -- ── Pairing loop ──────────────────────────────────────────────────────────────
 
 local function rankedMatchesPlayed(profile)

@@ -51,6 +51,7 @@ local Remotes = {
 	RequestQueue    = getOrCreateRemote("RequestQueue"),
 	RequestEquip    = getOrCreateRemote("RequestEquip"),
 	RequestReady    = getOrCreateRemote("RequestReady"),
+	ChallengeResponse = getOrCreateRemote("ChallengeResponse"), -- C→S: accept/decline an invite
 
 	-- Server to Client
 	MatchStateChanged   = getOrCreateRemote("MatchStateChanged"),
@@ -60,6 +61,8 @@ local Remotes = {
 	QueueStatus         = getOrCreateRemote("QueueStatus"),
 	ProfileSummary      = getOrCreateRemote("ProfileSummary"),
 	MmrUpdated          = getOrCreateRemote("MmrUpdated"),
+	ChallengeInvite     = getOrCreateRemote("ChallengeInvite"),  -- S→C: "X challenges you"
+	ChallengeStatus     = getOrCreateRemote("ChallengeStatus"),  -- S→C: sent/declined/expired/cancelled
 }
 
 return Remotes

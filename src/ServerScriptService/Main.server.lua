@@ -57,6 +57,12 @@ local MatchmakingService = require(MatchmakingFolder:WaitForChild("MatchmakingSe
 -- Cosmetics (Phase 3): equip validation + win-rate-neutrality audit
 require(script.Parent:WaitForChild("CosmeticsService"))
 
+-- Hub + challenge flow: characters walk a lobby and challenge each other into
+-- a battle (director feature). ChallengeService wires HubService's prompts.
+local HubService = require(script.Parent:WaitForChild("HubService"))
+require(script.Parent:WaitForChild("ChallengeService"))
+HubService.BuildHub()
+
 -- HEADLESS MODE: only runs in Studio when explicitly set to true.
 -- NEVER ship with this enabled — live players will never get a match.
 local HEADLESS_MODE = false and RunService:IsStudio()
@@ -70,17 +76,8 @@ else
     Players.PlayerAdded:Connect(function(player)
         print("Server: Player joined: " .. player.Name)
 
-        -- No character → set the replication focus explicitly or a
-        -- streaming-enabled place never sends the world to this client
-        MatchManager.SetLobbyFocus(player)
-
-        -- Profile loads in parallel — never blocks the lobby. If the load
-        -- fails in a way that risks data loss (live lock elsewhere, newer
-        -- schema), the player is kicked rather than played without saves.
-        -- On success: push their rank summary and drop them into the casual
-        -- queue (the familiar join-and-play flow; ranked is opt-in via UI).
         -- Reconnect first: a player returning within the disconnect grace
-        -- resumes their live match seat instead of re-entering the queue.
+        -- resumes their live match seat instead of respawning in the hub.
         local resumedMatch = MatchManager.HandlePlayerReturned(player.UserId)
 
         task.spawn(function()
@@ -92,17 +89,23 @@ else
             end
             MatchmakingService.PushProfileSummary(player.UserId)
             if not resumedMatch then
-                MatchmakingService.JoinQueue(player.UserId, "Casual")
+                -- Spawn as a walking character in the hub; the player starts a
+                -- battle by challenging someone (or the bot dummy). Ranked
+                -- matchmaking stays opt-in via the queue UI.
+                HubService.SpawnInHub(player)
             end
         end)
     end)
 
-    -- After each match, returning players rejoin their queue mode; the
-    -- matchmaking loop pairs them again (their freed slot is available).
-    MatchManager.OnReadyForRematch(function(returningPlayers, finishedState)
-        local mode = finishedState and finishedState.queueMode or "Casual"
+    -- After each match, players return to the hub (no auto-rematch): they
+    -- re-challenge from there. Ranked-queue players are NOT auto-requeued —
+    -- they choose to queue again.
+    MatchManager.OnReadyForRematch(function(returningPlayers, _finishedState)
         for _, pid in ipairs(returningPlayers) do
-            MatchmakingService.JoinQueue(pid, mode)
+            local player = Players:GetPlayerByUserId(pid)
+            if player then
+                HubService.SpawnInHub(player)
+            end
         end
     end)
 end
