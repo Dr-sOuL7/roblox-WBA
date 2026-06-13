@@ -583,7 +583,8 @@ Remotes.StateSnapshot.OnClientEvent:Connect(function(snapshot)
 	end
 
 	if currentPhase ~= "Active" then return end
-	local localState = snapshot.beyStates and snapshot.beyStates[localPlayer.UserId]
+	-- Snapshot beyStates are STRING-keyed (remote serialization canon)
+	local localState = snapshot.beyStates and snapshot.beyStates[tostring(localPlayer.UserId)]
 	if not localState then return end
 	-- Server says no command active: clear any stale local prediction immediately
 	if localState.currentCommand == nil and activeCommand ~= nil then
@@ -642,19 +643,30 @@ Remotes.MatchStateChanged.OnClientEvent:Connect(function(phase, data)
 			readyButton.BackgroundColor3 = Color3.fromRGB(70, 160, 90)
 		end
 		setupPanel.Visible = true
-		-- Opponent readiness ticks
+		-- Opponent readiness ticks (dictionary payloads arrive STRING-keyed)
 		if data.ready then
 			local others, readyCount = 0, 0
 			for _, pid in ipairs(data.players or {}) do
 				if pid ~= localPlayer.UserId then
 					others += 1
-					if data.ready[pid] then readyCount += 1 end
+					if data.ready[tostring(pid)] or data.ready[pid] then readyCount += 1 end
 				end
 			end
 			if others > 0 then
-				readyStatusLabel.Text = (readyCount >= others)
-					and "Opponent: READY ✓"
-					or "Waiting for opponent..."
+				local vsBot = false
+				if data.bots then
+					for _, pid in ipairs(data.players or {}) do
+						if pid ~= localPlayer.UserId
+							and (data.bots[tostring(pid)] ~= nil or data.bots[pid] ~= nil) then
+							vsBot = true
+						end
+					end
+				end
+				if readyCount >= others then
+					readyStatusLabel.Text = vsBot and "Opponent: BOT — READY ✓" or "Opponent: READY ✓"
+				else
+					readyStatusLabel.Text = vsBot and "Opponent: BOT (readying...)" or "Waiting for opponent..."
+				end
 			end
 		end
 

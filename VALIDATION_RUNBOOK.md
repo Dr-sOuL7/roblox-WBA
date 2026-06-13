@@ -14,8 +14,14 @@ Hardware: 2 desktop testers (mouse/keyboard). Build: sync with Rojo
 1. Open the place, **Play Solo**. Confirm:
    - Camera frames the whole bowl from the isometric angle and never snaps away
      (no character spawns — this is intended).
-   - A solo practice match starts after ~6–8 s (matchmaking auto-queues you
-     into Casual; a lone player on an idle server gets practice).
+   - A practice match **vs the BOT** starts after ~6–8 s (matchmaking
+     auto-queues you into Casual; a lone player gets the AI opponent). You
+     should see TWO Beys — yours and the bot's — and real clashes. The bot
+     readies itself ~1.5 s in, launches near GO, and uses A/D/E commands.
+   - If the world is invisible while UI works: the place must have
+     StreamingEnabled OFF (synced via default.project.json) — re-sync Rojo
+     and check the client console for "[Renderer] Bey model ... not
+     replicated" diagnostics.
    - Expect a loud "[ProfileStore] DataStores unavailable in Studio" warning —
      the in-memory mock is intended in Studio without API access.
    - **Launch ceremony:** aim panel appears (HEIGHT / ANGLE θ / AIM φ sliders)

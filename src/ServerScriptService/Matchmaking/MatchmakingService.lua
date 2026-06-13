@@ -24,11 +24,12 @@ local Cosmetics = require(ReplicatedStorage:WaitForChild("Cosmetics"))
 local MmrLogic = require(script.Parent:WaitForChild("MmrLogic"))
 local MatchQueue = require(script.Parent:WaitForChild("MatchQueue"))
 local MatchManager = require(script.Parent.Parent:WaitForChild("MatchManager"))
+local BotController = require(script.Parent.Parent:WaitForChild("BotController"))
 local TickManager = require(script.Parent.Parent:WaitForChild("TickManager"))
 local ProfileStore = require(script.Parent.Parent:WaitForChild("Persistence"):WaitForChild("ProfileStore"))
 
 local TICK_SECONDS = 1
-local SOLO_PRACTICE_WAIT = 6 -- lone casual player on an idle server gets practice
+local SOLO_PRACTICE_WAIT = 6 -- lone casual player on an idle server gets a BOT battle
 
 local MatchmakingService = {}
 
@@ -198,18 +199,23 @@ task.spawn(function()
 			end
 		end
 
-		-- Solo practice: a lone casual player on a completely idle server
+		-- Solo players battle the BOT: a lone casual player on a completely
+		-- idle server gets a real 1v1 against the AI (director feature).
 		local casual = _queues.Casual
 		if casual:size() == 1 and _queues.Ranked:size() == 0
 			and MatchManager.GetActiveMatchCount() == 0 then
 			local entry = casual._entries[1]
 			if (now - entry.joinedAt) >= SOLO_PRACTICE_WAIT then
 				casual:leave(entry.userId)
-				print("Server: Starting solo practice match.")
-				local instance = MatchManager.StartNewMatch({ entry.userId }, {
-					queueMode = "Casual",
-					stadiumId = entry.meta and entry.meta.stadiumPref or nil,
-				})
+				print("Server: Starting practice match vs BOT.")
+				local instance = MatchManager.StartNewMatch(
+					{ entry.userId, BotController.BOT_USER_ID },
+					{
+						queueMode = "Casual",
+						stadiumId = entry.meta and entry.meta.stadiumPref or nil,
+						bots = { [BotController.BOT_USER_ID] = "Practice" },
+					}
+				)
 				if instance then
 					pushQueueStatus(entry.userId, { state = "Matched", mode = "Casual" })
 				else

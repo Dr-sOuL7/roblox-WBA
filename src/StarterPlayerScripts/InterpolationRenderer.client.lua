@@ -23,13 +23,29 @@ local currentMatchId = nil
 local arenaOrigin = Vector3.new(0, 0, 0)
 local matchFolder = nil
 
+local missingModelWarned = {} -- "matchId:pid" -> true (one diagnostic per Bey per match)
+
 local function getBeyModel(pid)
 	if not currentMatchId then return nil end
 	if not matchFolder or matchFolder.Parent == nil or matchFolder.Name ~= currentMatchId then
 		local matches = workspace:FindFirstChild("Matches")
 		matchFolder = matches and matches:FindFirstChild(currentMatchId) or nil
 	end
-	return matchFolder and matchFolder:FindFirstChild("Bey_" .. tostring(pid)) or nil
+	local model = matchFolder and matchFolder:FindFirstChild("Bey_" .. tostring(pid)) or nil
+	if not model then
+		local key = tostring(currentMatchId) .. ":" .. tostring(pid)
+		if not missingModelWarned[key] then
+			missingModelWarned[key] = true
+			task.delay(2, function()
+				-- Still missing after 2 s of snapshots? That's a replication
+				-- problem worth reporting, not a race.
+				if currentMatchId and not getBeyModel(pid) then
+					warn(string.format("[Renderer] Bey model for %s not replicated in match %s — check StreamingEnabled/ReplicationFocus", tostring(pid), tostring(currentMatchId)))
+				end
+			end)
+		end
+	end
+	return model
 end
 
 -- Lazily create and attach visual effect instances to the Bey model.
@@ -170,7 +186,8 @@ Remotes.StateSnapshot.OnClientEvent:Connect(function(snapshot)
 				hitstopDuration = Constants.HitstopHeavy
 			end
 			for _, pid in ipairs(ev.eventData.involvedBeys) do
-				local vis = ensureVisuals(pid)
+				-- beyVisuals is keyed by the snapshot's STRING pids
+				local vis = ensureVisuals(tostring(pid))
 				if hitstopDuration > 0 then
 					vis.hitstop = hitstopDuration
 				end

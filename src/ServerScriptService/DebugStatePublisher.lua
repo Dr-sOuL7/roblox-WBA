@@ -28,9 +28,12 @@ function DebugStatePublisher.OnReplicationPhase(matchState)
         })
     end
 
+    -- STRING keys: Roblox remote serialization converts numeric dictionary
+    -- keys to strings on the receiving side; sending them as strings makes
+    -- both sides agree instead of silently mismatching client lookups.
     for _, pid in ipairs(matchState.playerOrder) do
         local bState = matchState.beyStates[pid]
-        snapshot.beyStates[pid] = {
+        snapshot.beyStates[tostring(pid)] = {
             position = bState.position,
             velocity = bState.velocity,
             angularVelocity = bState.angularVelocity,

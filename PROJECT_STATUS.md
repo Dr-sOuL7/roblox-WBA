@@ -20,6 +20,22 @@ else Poor); missed clicks auto-launch Poor 2 s after GO. Client submits only
 slider numbers — the server clamps and builds all vectors (anti-cheat
 strictly tightened). H-gate scripts updated in the runbook.
 
+### Post-Phase-3 director features & live-test fixes
+
+- **BOT opponent for solo players** (`BotController.lua`): a lone casual
+  player battles the AI — it readies, launches near GO (20/55/25
+  Perfect/Good/Poor), and plays A/D/E through the same validated queues as
+  humans. Deterministic per match seed; never runs headless; no profile, no
+  stats, no rating impact.
+- **World-invisibility fixes** (first live report: UI worked, no 3D):
+  StreamingEnabled forced off via project file; per-player ReplicationFocus
+  (lobby + per-match — required because no characters exist); Bey models
+  built at their spawn points; CSG inputs parented during SubtractAsync;
+  renderer prints a diagnostic if a Bey model fails to replicate within 2 s.
+- **Remote key canon**: snapshot/ready/bots dictionaries are STRING-keyed
+  over the wire (Roblox converts numeric dict keys anyway) — fixed silently
+  dead client lookups (command sync, hitstop, ready ticks).
+
 ### Phase 3 progress
 
 | Item | State |

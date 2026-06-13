@@ -60,6 +60,40 @@ local function arenaOriginForSlot(slot)
 	return Vector3.new((slot - 1) * Constants.ArenaSlotSpacing, 0, 0)
 end
 
+-- No characters exist (players pilot Beys), so each client's replication
+-- focus must be set explicitly — without one, a streaming-enabled place may
+-- never send the arena to the client at all (UI works, world invisible).
+-- StreamingEnabled is also forced off via default.project.json; this is the
+-- belt to that suspender.
+local _lobbyFocus = nil
+
+local function getLobbyFocus()
+	if not _lobbyFocus or not _lobbyFocus.Parent then
+		_lobbyFocus = Instance.new("Part")
+		_lobbyFocus.Name = "LobbyFocus"
+		_lobbyFocus.Size = Vector3.new(1, 1, 1)
+		_lobbyFocus.Transparency = 1
+		_lobbyFocus.Anchored = true
+		_lobbyFocus.CanCollide = false
+		_lobbyFocus.CFrame = CFrame.new(0, 10, 0) -- slot 1 arena
+		_lobbyFocus.Parent = getMatchesFolder()
+	end
+	return _lobbyFocus
+end
+
+function MatchManager.SetLobbyFocus(player)
+	player.ReplicationFocus = getLobbyFocus()
+end
+
+local function setMatchFocus(playerIds, focusPart)
+	for _, pid in ipairs(playerIds) do
+		local player = Players:GetPlayerByUserId(pid)
+		if player then
+			player.ReplicationFocus = focusPart
+		end
+	end
+end
+
 -- ── Stadium template (CSG once, clone per match) ─────────────────────────────
 
 local function buildStadiumTemplate(stadiumDef)
@@ -84,10 +118,22 @@ local function buildStadiumTemplate(stadiumDef)
 	-- Center the sphere exactly R studs above 0, so the lowest tip touches Y=0
 	sphere.CFrame = CFrame.new(0, R, 0)
 
-	-- Generate the smooth curvy bowl using CSG Solid Modeling
+	-- Generate the smooth curvy bowl using CSG Solid Modeling.
+	-- Inputs are parented while the operation runs (CSG can fail on
+	-- out-of-DataModel parts in some engine paths), then discarded.
+	block.Anchored = true
+	sphere.Anchored = true
+	block.Parent = workspace
+	sphere.Parent = workspace
 	local success, curvyBowl = pcall(function()
 		return block:SubtractAsync({ sphere }, Enum.CollisionFidelity.Default, Enum.RenderFidelity.Precise)
 	end)
+	sphere:Destroy()
+	if success and curvyBowl then
+		block:Destroy()
+	else
+		block.Parent = nil -- keep as the visual fallback below
+	end
 
 	if not success or not curvyBowl then
 		warn("[MatchManager] Failed to generate curvy stadium (CSG error); falling back to flat floor.")
@@ -274,6 +320,7 @@ function MatchManager.StartNewMatch(playerIds, options)
 	local newState = MatchState.new(matchSeed)
 	newState.matchId = string.format("Match_%d_s%d", matchSeed, slot)
 	newState.queueMode = options.queueMode or "Casual"
+	newState.bots = options.bots -- { [botUserId] = profileName } or nil
 	-- Stadium: explicit pick (casual select, later) or seeded rotation (ranked)
 	newState.stadiumId = options.stadiumId or Stadiums.pickForSeed(matchSeed)
 	local stadiumDef = Stadiums.get(newState.stadiumId)
@@ -298,14 +345,30 @@ function MatchManager.StartNewMatch(playerIds, options)
 
 	spawnStadium(stadiumDef, folder, origin) -- may yield once per stadium (template CSG build)
 
+	-- Per-match replication focus at this arena (see getLobbyFocus comment)
+	local focusPart = Instance.new("Part")
+	focusPart.Name = "MatchFocus"
+	focusPart.Size = Vector3.new(1, 1, 1)
+	focusPart.Transparency = 1
+	focusPart.Anchored = true
+	focusPart.CanCollide = false
+	focusPart.CFrame = CFrame.new(origin + Vector3.new(0, 10, 0))
+	focusPart.Parent = folder
+
 	-- Equipped skins, resolved once at match start (mid-match equips are
 	-- rejected). COSMETIC ONLY: this map never enters beyStates/physics —
 	-- the headless suite proves outcomes are identical with or without it.
 	newState.cosmetics = {}
 	for _, pid in ipairs(playerIds) do
-		local profile = ProfileStore.GetProfile(pid)
-		local skinId = profile and profile.equippedCosmetics and profile.equippedCosmetics.skin
-		newState.cosmetics[pid] = Cosmetics.get(skinId).id
+		if newState.bots and newState.bots[pid] then
+			-- Bots wear a deterministic starter skin (seeded, cosmetic only)
+			local ids = Cosmetics.ownedSkinIds(nil)
+			newState.cosmetics[pid] = ids[(matchSeed % #ids) + 1]
+		else
+			local profile = ProfileStore.GetProfile(pid)
+			local skinId = profile and profile.equippedCosmetics and profile.equippedCosmetics.skin
+			newState.cosmetics[pid] = Cosmetics.get(skinId).id
+		end
 	end
 
 	-- Mirrored spawns at half the playable radius — scales with the stadium
@@ -324,8 +387,14 @@ function MatchManager.StartNewMatch(playerIds, options)
 		newState.beyStates[pid] = bState
 		newState.pendingAim[pid] = LaunchQuality.defaultAimFor(side)
 
-		createPrototypeBeyModel(pid, i == 1, folder, origin, Cosmetics.get(newState.cosmetics[pid]))
+		-- Build the model AT its spawn point so it is visible immediately,
+		-- before the first snapshot drives the renderer
+		createPrototypeBeyModel(pid, i == 1, folder,
+			origin + Vector3.new(side * spawnRadius, Constants.LaunchHeightDefault, 0),
+			Cosmetics.get(newState.cosmetics[pid]))
 	end
+
+	setMatchFocus(playerIds, focusPart)
 
 	local instance = MatchInstance.fromState(newState, slot, origin)
 	instance.folder = folder
@@ -344,6 +413,13 @@ function MatchManager.StartNewMatch(playerIds, options)
 end
 
 function MatchManager.CleanupMatch(instance)
+	-- Return surviving participants' replication focus to the lobby
+	for _, pid in ipairs(instance.state.playerOrder) do
+		local player = Players:GetPlayerByUserId(pid)
+		if player then
+			player.ReplicationFocus = getLobbyFocus()
+		end
+	end
 	TickManager.UnregisterInstance(instance)
 	if instance.folder then
 		instance.folder:Destroy()

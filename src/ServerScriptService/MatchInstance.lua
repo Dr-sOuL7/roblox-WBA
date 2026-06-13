@@ -43,6 +43,7 @@ function MatchInstance:BroadcastPhase(payload, onlyUserId)
 	payload.arenaOrigin = self.arenaOrigin
 	payload.stadiumId = self.state.stadiumId
 	payload.cosmetics = self.state.cosmetics
+	payload.bots = self.state.bots
 	for _, pid in ipairs(self.state.playerOrder) do
 		if onlyUserId and pid ~= onlyUserId then continue end
 		local player = Players:GetPlayerByUserId(pid)
@@ -95,6 +96,18 @@ function MatchInstance:StepTick(isHeadless)
 	table.clear(state.tickEvents)
 
 	if state.phase == "Setup" then
+		-- Bots ready up like a human who doesn't dawdle (~1.5 s in)
+		if state.bots and not isHeadless then
+			local setupStart = state.timers.setupDeadline - Constants.SetupTimeoutSeconds
+			if workspace:GetServerTimeNow() >= setupStart + 1.5 then
+				for botId in pairs(state.bots) do
+					if not state.ready[botId] then
+						state.ready[botId] = true
+						self:BroadcastPhase({ setupDeadline = state.timers.setupDeadline, ready = state.ready })
+					end
+				end
+			end
+		end
 		-- Aim-and-ready ceremony: advance when everyone is ready, or when the
 		-- setup deadline auto-readies the stragglers (AFK can't hold a match).
 		if isHeadless then

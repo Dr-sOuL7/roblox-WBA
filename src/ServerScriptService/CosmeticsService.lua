@@ -72,6 +72,9 @@ MatchManager.OnMatchFinished(function(state)
 		return
 	end
 	for _, pid in ipairs(state.playerOrder) do
+		if state.bots and state.bots[pid] then
+			continue -- bot picks aren't player choice; keep the audit clean
+		end
 		local skinId = state.cosmetics[pid] or Cosmetics.DEFAULT_SKIN
 		local entry = auditEntry(skinId)
 		entry.picks += 1

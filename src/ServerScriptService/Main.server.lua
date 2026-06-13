@@ -16,6 +16,7 @@ require(script.Parent:WaitForChild("SpinEvaluator"))
 require(script.Parent:WaitForChild("ReplayRecorder"))
 require(script.Parent:WaitForChild("TelemetryLogger"))
 require(script.Parent:WaitForChild("DebugStatePublisher"))
+require(script.Parent:WaitForChild("BotController"))
 
 local SimulationHarness = require(script.Parent:WaitForChild("SimulationHarness"))
 
@@ -68,6 +69,10 @@ if HEADLESS_MODE then
 else
     Players.PlayerAdded:Connect(function(player)
         print("Server: Player joined: " .. player.Name)
+
+        -- No character → set the replication focus explicitly or a
+        -- streaming-enabled place never sends the world to this client
+        MatchManager.SetLobbyFocus(player)
 
         -- Profile loads in parallel — never blocks the lobby. If the load
         -- fails in a way that risks data loss (live lock elsewhere, newer

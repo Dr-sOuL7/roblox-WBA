@@ -23,6 +23,9 @@ local function recordResult(state)
 	local winner = state.currentWinner
 
 	for _, pid in ipairs(state.playerOrder) do
+		if state.bots and state.bots[pid] then
+			continue -- bots have no profiles, no stats
+		end
 		local outcome
 		local finishReason
 
