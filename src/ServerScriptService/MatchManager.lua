@@ -13,6 +13,7 @@ local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
 local MatchState = require(ReplicatedStorage:WaitForChild("MatchState"))
 local Stadiums = require(ReplicatedStorage:WaitForChild("Stadiums"))
 local Cosmetics = require(ReplicatedStorage:WaitForChild("Cosmetics"))
+local BeyParts = require(ReplicatedStorage:WaitForChild("BeyParts"))
 local LaunchQuality = require(ReplicatedStorage:WaitForChild("LaunchQuality"))
 local TickManager = require(script.Parent:WaitForChild("TickManager"))
 local MatchInstance = require(script.Parent:WaitForChild("MatchInstance"))
@@ -392,6 +393,14 @@ function MatchManager.StartNewMatch(playerIds, options)
 		bState.position = Vector3.new(side * spawnRadius, Constants.LaunchHeightDefault, 0)
 		bState.velocity = Vector3.new(0, 0, 0)
 		bState.previousPosition = bState.position
+		-- Craft modifiers from the player's equipped build (ADR-003). Bots and
+		-- profile-less sessions stay neutral (createBeyState default 1.0).
+		if not (newState.bots and newState.bots[pid]) then
+			local profile = ProfileStore.GetProfile(pid)
+			if profile and profile.build then
+				bState.mods = BeyParts.deriveStats(profile.build).multipliers
+			end
+		end
 		newState.beyStates[pid] = bState
 		newState.pendingAim[pid] = LaunchQuality.defaultAimFor(side)
 

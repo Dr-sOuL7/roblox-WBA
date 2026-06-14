@@ -19,8 +19,11 @@ function SpinEvaluator.OnEvaluationPhase(matchState)
 
 		-- Natural spin decay, accelerated by accumulated damage: a destabilized
 		-- Bey scrubs energy faster (StabilitySpinDrainMax at stability 0).
+		-- Stamina (ADR-003) slows decay: dividing the exponent by Stamina raises
+		-- AngularDecay (<1) toward 1 → less loss per tick. Neutral Stamina == 1
+		-- → identical to baseline.
 		local stabilityFraction = math.clamp(bState.stability / Constants.BaseStability, 0, 1)
-		local drainExponent = 1 + Constants.StabilitySpinDrainMax * (1 - stabilityFraction)
+		local drainExponent = (1 + Constants.StabilitySpinDrainMax * (1 - stabilityFraction)) / bState.mods.Stamina
 		bState.angularVelocity *= Constants.AngularDecay ^ drainExponent
 		local rpm = bState.angularVelocity.Magnitude
 

@@ -20,6 +20,29 @@ else Poor); missed clicks auto-launch Poor 2 s after GO. Client submits only
 slider numbers — the server clamps and builds all vectors (anti-cheat
 strictly tightened). H-gate scripts updated in the runbook.
 
+### Craft-driven Beys (director pivot — ADR-003) — FOUNDATION done, venue/editor next
+
+Overturns one-Bey (ADR-002): a build of 4 parts (Tip/Disc/Blade/Core) now
+affects battle, under three guardrails — **sidegrade (equal power)**, **free &
+equal access** (no pay-to-win), **preset shapes only** (large catalog). Status:
+
+| Item | State |
+|---|---|
+| Vision ADR | ✅ `docs/ADR-003-craft-driven-beys.md` (supersedes ADR-002) |
+| Catalog + stat derivation | ✅ `BeyParts.lua` (pure): 4 stats (Attack/Defense/Stamina/Agility), 12–13 shapes/slot incl. wild, conserved-budget normalization |
+| Default build == baseline | ✅ neutral build → all multipliers 1.0 → full Phase 1 suite reproduces baseline EXACTLY |
+| Sim integration | ✅ Attack/Defense (collision push capped + stability dmg via guard²·⁵), Stamina (spin decay), Agility (steering + guard/centre-pull blend); neutral = no-op |
+| Live matches use builds | ✅ MatchManager derives mods from each profile's build |
+| No-dominant-build gate | ✅ `_G.RunBuildGate()` / runner `build` mode: clean A/D/S triangle (Def>Atk 62%, Atk>Sta 79%, Sta>Def 60%), no field sweep, ceiling 85% |
+| Customization venue + editor UI | ⬜ NEXT (Roblox-runtime; needs live verification) |
+| Crafted-model rendering in battle | ⬜ NEXT (build the 3D Bey from its parts) |
+| Battle-feel VFX (clash/fly/stop) | ⬜ separate cycle |
+
+Known/accepted: pure-Agile vs a dedicated Stamina wall loses ~97% under bot
+play (Agility's offence is skilled evasion bots can't pilot) — flagged for
+live skill validation; bound by the no-field-sweep guarantee. `STAT_GAIN`
+(0.5) is the single "how much build matters" dial, tunable from live data.
+
 ### Hub challenge flow (director redesign of match entry)
 
 Players now spawn as walking CHARACTERS in a social hub (HubService) instead

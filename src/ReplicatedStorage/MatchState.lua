@@ -68,6 +68,9 @@ function MatchState.createBeyState(playerId: number)
         commandCooldownTimer = 0,  -- ticks until next command is allowed
         launchConsumed = false,    -- single-fire guard: only one launch per match
         launchQuality = nil,       -- nil | "Perfect" | "Good" | "Poor" (set on launch)
+        -- Craft-driven stat multipliers (ADR-003). Default 1.0 = neutral build
+        -- = validated baseline; MatchManager sets these from the player's build.
+        mods = { Attack = 1, Defense = 1, Stamina = 1, Agility = 1 },
         -- Ring-out state
         ringOutTimer = 0,          -- ticks spent past the rim (grace period counter)
         finishReason = nil,        -- "SpinOut" | "WobbleCollapse" | "RingOut"

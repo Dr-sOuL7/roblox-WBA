@@ -81,6 +81,17 @@ elseif mode == "stadium" then
 		error("Stadium gate reported CUT for " .. stadiumId, 0)
 	end
 
+elseif mode == "build" then
+	require(__tokens["ServerScriptService/BeyController"])
+	require(__tokens["ServerScriptService/PhysicsController"])
+	require(__tokens["ServerScriptService/SpinEvaluator"])
+	local SimulationHarness = require(__tokens["ServerScriptService/SimulationHarness"])
+
+	local results = SimulationHarness.RunBuildGate({ count = tonumber(args[2]) or 300 })
+	if not results.allPass then
+		error("Build gate FAILED", 0)
+	end
+
 elseif mode == "persistence" then
 	local ProfileLogic = require(__tokens["ServerScriptService/Persistence/ProfileLogic"])
 	local ProfileSchema = require(__tokens["ServerScriptService/Persistence/ProfileSchema"])
@@ -241,6 +252,65 @@ elseif mode == "persistence" then
 
 	local Stadiums = require(__tokens["ReplicatedStorage/Stadiums"])
 	local Cosmetics = require(__tokens["ReplicatedStorage/Cosmetics"])
+	local BeyParts = require(__tokens["ReplicatedStorage/BeyParts"])
+
+	print("──────── BeyParts derivation tests (ADR-003) ────────")
+
+	local function sumFractions(frac)
+		return frac.Attack + frac.Defense + frac.Stamina + frac.Agility
+	end
+
+	test("derive: default build is neutral (all multipliers 1.0)", function()
+		local d = BeyParts.deriveStats(BeyParts.defaultBuild())
+		for _, stat in ipairs(BeyParts.STATS) do
+			expect(math.abs(d.fractions[stat] - 0.25) < 1e-9, stat .. " fraction not 0.25")
+			expect(math.abs(d.multipliers[stat] - 1.0) < 1e-9, stat .. " multiplier not 1.0")
+		end
+	end)
+	test("derive: fractions always sum to 1 (conserved budget)", function()
+		for _, name in ipairs({ "Attacker", "Defender", "Stamina", "Agile" }) do
+			-- reuse the harness archetypes indirectly via hand specs
+		end
+		local builds = {
+			{ Tip={shape="Spike"}, Disc={shape="Star"}, Blade={shape="Shuriken"}, Core={shape="Spike"} },
+			{ Tip={shape="Flat"}, Disc={shape="Shield"}, Blade={shape="Orb"}, Core={shape="Heavy"} },
+			{ Tip={shape="Hollow"}, Disc={shape="Round"}, Blade={shape="Ring"}, Core={shape="Orb"} },
+			BeyParts.defaultBuild(),
+		}
+		for _, b in ipairs(builds) do
+			local d = BeyParts.deriveStats(b)
+			expect(math.abs(sumFractions(d.fractions) - 1.0) < 1e-9, "fractions must sum to 1")
+		end
+	end)
+	test("derive: archetypes lead in their headline stat", function()
+		local atk = BeyParts.deriveStats({ Tip={shape="Spike",height=1.8,weight=8}, Disc={shape="Star",weight=9}, Blade={shape="Shuriken",height=2.4,weight=12}, Core={shape="Spike",weight=7} })
+		expect(atk.fractions.Attack > 0.25, "attacker should exceed neutral Attack")
+		expect(atk.multipliers.Attack > 1.0 and atk.multipliers.Stamina < 1.0, "attack up, stamina down (sidegrade)")
+		local def = BeyParts.deriveStats({ Tip={shape="Dome",height=0.6,weight=8}, Disc={shape="Shield",height=0.5,weight=14}, Blade={shape="Round",weight=6}, Core={shape="Heavy",weight=7} })
+		expect(def.fractions.Defense > 0.25, "defender should exceed neutral Defense")
+	end)
+	test("derive: clamps out-of-range + unknown shape", function()
+		local d = BeyParts.deriveStats({ Tip={shape="NotReal", height=999, weight=-5} })
+		expect(math.abs(sumFractions(d.fractions) - 1.0) < 1e-9, "still valid after clamping garbage")
+		local part = BeyParts.clampPart("Blade", { shape = "Nope", height = 99, weight = 99 })
+		expect(part.shape == "Standard", "unknown shape -> Standard")
+		expect(part.height <= BeyParts.LIMITS.Blade.height.max, "height clamped")
+		expect(part.weight <= BeyParts.LIMITS.Blade.weight.max, "weight clamped")
+	end)
+	test("derive: color never affects stats", function()
+		local a = BeyParts.deriveStats(BeyParts.defaultBuild())
+		local withColor = BeyParts.defaultBuild()
+		withColor.Tip.color = { 255, 0, 0 }
+		local b = BeyParts.deriveStats(withColor)
+		for _, stat in ipairs(BeyParts.STATS) do
+			expect(a.multipliers[stat] == b.multipliers[stat], "color changed a stat")
+		end
+	end)
+	test("derive: catalog is generous (>= 10 shapes per slot)", function()
+		for _, slot in ipairs(BeyParts.SLOTS) do
+			expect(#BeyParts.SHAPES[slot] >= 10, slot .. " has < 10 shapes")
+		end
+	end)
 
 	print("──────── Cosmetics registry tests ────────")
 

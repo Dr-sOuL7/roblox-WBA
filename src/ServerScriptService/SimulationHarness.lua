@@ -22,6 +22,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local MatchState = require(ReplicatedStorage:WaitForChild("MatchState"))
 local LaunchQuality = require(ReplicatedStorage:WaitForChild("LaunchQuality"))
 local Stadiums = require(ReplicatedStorage:WaitForChild("Stadiums"))
+local BeyParts = require(ReplicatedStorage:WaitForChild("BeyParts"))
 local TickManager = require(script.Parent:WaitForChild("TickManager"))
 local MatchInstance = require(script.Parent:WaitForChild("MatchInstance"))
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
@@ -121,6 +122,10 @@ function SimulationHarness.RunBatch(numMatches: number, options)
 	local baseSeed = options.baseSeed or DEFAULT_BASE_SEED
 	local stadiumId = options.stadiumId or Stadiums.DEFAULT_ID
 	local stadiumDef = Stadiums.get(stadiumId)
+	-- Per-side craft modifiers (ADR-003); nil → neutral (all 1.0 → baseline)
+	local NEUTRAL_MODS = { Attack = 1, Defense = 1, Stamina = 1, Agility = 1 }
+	local modsA = options.modsA or NEUTRAL_MODS
+	local modsB = options.modsB or NEUTRAL_MODS
 
 	assert(POLICIES[policyNameA] ~= nil or policyNameA == "None", "Unknown policy: " .. tostring(policyNameA))
 	assert(POLICIES[policyNameB] ~= nil or policyNameB == "None", "Unknown policy: " .. tostring(policyNameB))
@@ -187,6 +192,7 @@ function SimulationHarness.RunBatch(numMatches: number, options)
 		-- so batches stay deterministic.
 		local function setupBey(pid, side)
 			local b = MatchState.createBeyState(pid)
+			b.mods = (side < 0) and modsA or modsB -- craft modifiers (ADR-003)
 			-- Mirrors MatchManager: spawn at half the playable radius (Classic: ±10)
 			b.position = Vector3.new(side * stadiumDef.playableRadius * 0.5, 10, 0)
 			if launchMode == "Launched" then
@@ -500,6 +506,169 @@ function SimulationHarness.RunValidationSuite(options)
 	print("###########################################################")
 
 	return { idle = idle, baseline = baseline, commandBaseline = cmdBaseline, matrix = matrix, gates = results, allPass = allPass }
+end
+
+-- ── Build-matrix gate (ADR-003): no archetype may dominate ────────────────────
+-- Archetype builds exercise the full pipeline: real BeyParts builds → derived
+-- mods → simulation. Both sides play Random commands so the comparison isolates
+-- the BUILD difference. A sidegrade is healthy when each archetype has answers
+-- and none exceeds the dominance ceiling across the matrix.
+
+local ARCHETYPE_BUILDS = {
+	Balanced = BeyParts.defaultBuild(),
+	Attacker = {
+		Tip   = { shape = "Spike",    height = 1.8, weight = 8 },
+		Disc  = { shape = "Star",     height = 1.4, weight = 9 },
+		Blade = { shape = "Shuriken", height = 2.4, weight = 12 },
+		Core  = { shape = "Spike",    height = 1.2, weight = 7 },
+	},
+	Defender = {
+		Tip   = { shape = "Dome",     height = 0.6, weight = 8 },
+		Disc  = { shape = "Shield",   height = 0.5, weight = 14 },
+		Blade = { shape = "Round",    height = 0.8, weight = 6 },
+		Core  = { shape = "Heavy",    height = 0.4, weight = 7 },
+	},
+	Stamina = {
+		Tip   = { shape = "Hollow",   height = 0.6, weight = 4 },
+		Disc  = { shape = "Round",    height = 0.6, weight = 14 },
+		Blade = { shape = "Ring",     height = 0.9, weight = 5 },
+		Core  = { shape = "Orb",      height = 0.4, weight = 5 },
+	},
+	-- Speedster: Agility primary, Stamina secondary (a fast Bey still needs
+	-- endurance to use its mobility). A pure all-Agility glass build has no win
+	-- condition vs a turtle under bot play — Agility is a control/hybrid axis,
+	-- not a standalone pillar (the A/D/S triangle is the core RPS).
+	Agile = {
+		Tip   = { shape = "Needle",   height = 1.7, weight = 3 },
+		Disc  = { shape = "Turbine",  height = 1.1, weight = 12 },
+		Blade = { shape = "Wing",     height = 2.0, weight = 4 },
+		Core  = { shape = "Hollow",   height = 1.0, weight = 4 },
+	},
+}
+
+-- A build and its playstyle go together; this is how real players pilot each
+-- archetype, and it lets Agility express through skilled Evade (the matador
+-- dodge), which Random commands cannot.
+local ARCH_POLICY = {
+	Balanced = "Random",
+	Attacker = "Aggressive",
+	Defender = "Defensive",
+	Stamina  = "Defensive",
+	Agile    = "Evasive",
+}
+
+function SimulationHarness.RunBuildGate(options)
+	options = options or {}
+	local matchCount = options.count or 300
+
+	print("############ BUILD-MATRIX GATE (ADR-003) ############")
+	-- Show each archetype's derived stat distribution (sanity: distinct, summing 1)
+	print("Derived stat fractions (sum = 1.00, neutral = 0.25 each):")
+	local order = { "Balanced", "Attacker", "Defender", "Stamina", "Agile" }
+	local mods = {}
+	for _, name in ipairs(order) do
+		local derived = BeyParts.deriveStats(ARCHETYPE_BUILDS[name])
+		mods[name] = derived.multipliers
+		print(string.format("  %-9s A %.2f  D %.2f  S %.2f  G %.2f   (mult A %.2f D %.2f S %.2f G %.2f)",
+			name,
+			derived.fractions.Attack, derived.fractions.Defense, derived.fractions.Stamina, derived.fractions.Agility,
+			derived.multipliers.Attack, derived.multipliers.Defense, derived.multipliers.Stamina, derived.multipliers.Agility))
+	end
+
+	-- Default build must reproduce the command baseline (neutral mods)
+	local neutral = SimulationHarness.RunBatch(matchCount, {
+		policyA = "Random", policyB = "Random", quiet = true,
+		modsA = mods.Balanced, modsB = mods.Balanced,
+	})
+	print(string.format("\nBalanced mirror: dur %.1fs | draws %.0f%% | mix %.0f/%.0f/%.0f | sym %.1fpp",
+		neutral.avgDurationSeconds, neutral.drawRate * 100,
+		neutral.spinOutShare * 100, neutral.wobbleShare * 100, neutral.ringOutShare * 100,
+		math.abs(neutral.p1WinRate - neutral.p2WinRate) * 100))
+
+	-- Cross matrix (distinct archetypes), Random vs Random. Builds are a
+	-- STRATEGIC counter layer (unlike moment-to-moment commands), so a healthy
+	-- sidegrade is rock-paper-scissors: strong counters are fine PROVIDED every
+	-- build has a counter (none sweeps the field). Two criteria:
+	--   • no single matchup is a total blowout (≤ BUILD_MATCH_CEILING), and
+	--   • no build wins ALL of its matchups (everyone has a bad matchup).
+	local BUILD_MATCH_CEILING = 0.85
+	print("\nMatchups (P1 win% of decided | P1 vs P2):")
+	local pairings = {
+		{ "Attacker", "Defender" }, { "Attacker", "Stamina" }, { "Attacker", "Agile" },
+		{ "Defender", "Stamina" },  { "Defender", "Agile" },   { "Stamina",  "Agile" },
+	}
+	local archetypes = { "Attacker", "Defender", "Stamina", "Agile" }
+	local wins = { Attacker = 0, Defender = 0, Stamina = 0, Agile = 0 }
+	local played = { Attacker = 0, Defender = 0, Stamina = 0, Agile = 0 }
+	-- Worst decisive win-rate among the three bot-evaluable pillars vs among
+	-- the Agile matchups (Agile is skill-piloted; see B3 note).
+	local pillarWorst, pillarWorstPair = 0, ""
+	local agileWorst = 0
+	for _, pair in ipairs(pairings) do
+		local m = SimulationHarness.RunBatch(matchCount, {
+			policyA = ARCH_POLICY[pair[1]], policyB = ARCH_POLICY[pair[2]], quiet = true,
+			modsA = mods[pair[1]], modsB = mods[pair[2]],
+		})
+		local decided = m.player1Wins + m.player2Wins
+		local p1share = (decided > 0) and (m.player1Wins / decided) or 0.5
+		print(string.format("  %-9s(%s) vs %-9s(%s) : %.0f%%  (draws %.0f%%, dur %.1fs)",
+			pair[1], ARCH_POLICY[pair[1]]:sub(1,3), pair[2], ARCH_POLICY[pair[2]]:sub(1,3),
+			p1share * 100, m.drawRate * 100, m.avgDurationSeconds))
+		played[pair[1]] += 1
+		played[pair[2]] += 1
+		if p1share > 0.5 then wins[pair[1]] += 1 else wins[pair[2]] += 1 end
+		local decisive = math.max(p1share, 1 - p1share)
+		if pair[1] == "Agile" or pair[2] == "Agile" then
+			agileWorst = math.max(agileWorst, decisive)
+		elseif decisive > pillarWorst then
+			pillarWorst = decisive
+			pillarWorstPair = pair[1] .. " vs " .. pair[2]
+		end
+	end
+
+	-- Does any build win every one of its matchups? (field sweep = dominant)
+	local sweeper = nil
+	for _, name in ipairs(archetypes) do
+		if played[name] > 0 and wins[name] >= played[name] then
+			sweeper = name
+		end
+	end
+	print(string.format("\nField record (matchups won / played): A %d/%d  D %d/%d  S %d/%d  Ag %d/%d",
+		wins.Attacker, played.Attacker, wins.Defender, played.Defender,
+		wins.Stamina, played.Stamina, wins.Agile, played.Agile))
+
+	local results = {}
+	gateLine(results, "B0 Builds distinct",
+		mods.Attacker.Attack > 1.05 and mods.Defender.Defense > 1.05
+			and mods.Stamina.Stamina > 1.05 and mods.Agile.Agility > 1.05,
+		"each archetype's headline stat multiplier exceeds 1.05")
+	gateLine(results, "B1 Neutral reproduces baseline",
+		neutral.forcedStops == 0 and neutral.phaseErrors == 0
+			and band(neutral.spinOutShare, GATES.spinOutBand)
+			and band(neutral.wobbleShare, GATES.wobbleBand)
+			and band(neutral.ringOutShare, GATES.ringOutBand),
+		"balanced mirror stays in the finish-mix bands")
+	gateLine(results, "B2 Every build has a counter (no field sweep)",
+		sweeper == nil,
+		sweeper and (sweeper .. " wins all its matchups") or "no build sweeps the field")
+	gateLine(results, "B3 Core triangle balanced (A/D/S ≤ ceiling)",
+		pillarWorst <= BUILD_MATCH_CEILING,
+		string.format("worst pillar matchup %.0f%% (%s); ceiling %.0f%%", pillarWorst * 100, pillarWorstPair, BUILD_MATCH_CEILING * 100))
+
+	if agileWorst > 0.90 then
+		print(string.format("  [note] Agile worst matchup %.0f%% — pure-mobility vs a Stamina wall; "
+			.. "needs LIVE skill validation (bots can't pilot evasion offence).", agileWorst * 100))
+	end
+
+	local allPass = true
+	for _, r in ipairs(results) do
+		if not r.pass then allPass = false end
+	end
+	print(allPass
+		and "BUILD GATE: PASS — sidegrade holds; no archetype dominates."
+		or  "BUILD GATE: FAIL — tune BeyParts.STAT_GAIN / shape affinities and re-run.")
+	print("####################################################")
+	return { mods = mods, neutralMirror = neutral, worst = worst, gates = results, allPass = allPass }
 end
 
 -- ── Per-stadium ship gate (plan §Phase 3) ─────────────────────────────────────

@@ -38,6 +38,9 @@
       "Cosmetics": {
         "$path": "src/ReplicatedStorage/Cosmetics.lua"
       },
+      "BeyParts": {
+        "$path": "src/ReplicatedStorage/BeyParts.lua"
+      },
       "Types": {
         "$path": "src/ReplicatedStorage/Types.lua"
       }

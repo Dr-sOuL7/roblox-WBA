@@ -68,14 +68,26 @@ local function doCollisionSubStep(matchState)
 					spinDmgMultiplier = Constants.SpinDamageMultiplierHeavy
 				end
 
-				local basePush = math.clamp(
-					impactSpeed * Constants.CollisionPushMultiplier,
-					Constants.CollisionPushMin,
-					Constants.CollisionPushMax
-				)
-				-- Attack: only the attacker absorbs amplified recoil; opponent receives base push
-				local pushForceA = basePush * (bA.currentCommand == "Attack" and Constants.CommandRecoilMultiplier or 1)
-				local pushForceB = basePush * (bB.currentCommand == "Attack" and Constants.CommandRecoilMultiplier or 1)
+				-- Craft mods (ADR-003): knockback dealt scales with the striker's
+				-- Attack and inversely with the receiver's GUARD (mostly Defense,
+				-- a little Agility — a nimble Bey takes glancing blows). The mod is
+				-- applied INSIDE the push cap, so no build can knock past ring-out
+				-- speed more than baseline — Attack's real win lever is the
+				-- (uncapped) stability/spin damage below, i.e. wearing the opponent
+				-- down to a wobble collapse, not a binary ring-out. Neutral mods
+				-- == 1 → identical to the validated baseline.
+				-- Command-Attack self-recoil is applied AFTER the cap (the
+				-- attacker's own knockback can exceed it — the existing risk).
+				local guardA = bA.mods.Defense * 0.8 + bA.mods.Agility * 0.2
+				local guardB = bB.mods.Defense * 0.8 + bB.mods.Agility * 0.2
+				local pushForceA = math.clamp(
+					impactSpeed * Constants.CollisionPushMultiplier * (bB.mods.Attack / guardA),
+					Constants.CollisionPushMin, Constants.CollisionPushMax
+				) * (bA.currentCommand == "Attack" and Constants.CommandRecoilMultiplier or 1)
+				local pushForceB = math.clamp(
+					impactSpeed * Constants.CollisionPushMultiplier * (bA.mods.Attack / guardB),
+					Constants.CollisionPushMin, Constants.CollisionPushMax
+				) * (bB.currentCommand == "Attack" and Constants.CommandRecoilMultiplier or 1)
 
 				local ret = Constants.TangentialEnergyRetention
 				bA.velocity = (normal * pushForceA) + (bA.velocity - bA.velocity:Dot(normal) * normal) * ret
@@ -93,8 +105,13 @@ local function doCollisionSubStep(matchState)
 				local dmgMultA = rng and rng:NextNumber(Constants.CollisionDamageVarianceMin, Constants.CollisionDamageVarianceMax) or 1.0
 				local dmgMultB = rng and rng:NextNumber(Constants.CollisionDamageVarianceMin, Constants.CollisionDamageVarianceMax) or 1.0
 
-				bA.stability = math.max(0, bA.stability - stabilityDmg * dmgMultA)
-				bB.stability = math.max(0, bB.stability - stabilityDmg * dmgMultB)
+				-- Stability damage taken scales with striker Attack / receiver guard².
+				-- Guard is squared HERE (not on the ring-out push, which stays
+				-- capped) so Defense's real payoff is durability: defenders outlast
+				-- attackers, who then pay their low-Stamina cost — closing the
+				-- Defense→beats→Attack link. Neutral guard == 1 → unchanged.
+				bA.stability = math.max(0, bA.stability - stabilityDmg * dmgMultA * (bB.mods.Attack / guardA ^ 1.5))
+				bB.stability = math.max(0, bB.stability - stabilityDmg * dmgMultB * (bA.mods.Attack / guardB ^ 1.5))
 
 				local spinDmgA = (1 - spinDmgMultiplier) * dmgMultA
 				local spinDmgB = (1 - spinDmgMultiplier) * dmgMultB
@@ -160,10 +177,14 @@ function PhysicsController.OnPhysicsPhase(matchState)
 			-- 4. Friction: per-sub-step value preserves the intended per-second deceleration
 			bState.velocity *= frictionPerSubStep
 
-			-- 5. Gentle bowl drift toward center (XZ-only so drift is horizontal)
+			-- 5. Gentle bowl drift toward center (XZ-only so drift is horizontal).
+			--    Centre pull → ring-out resistance (ADR-003): mostly Defense, a
+			--    little Agility (nimble Beys recover position). Blended so neutral
+			--    == 1 → identical to baseline.
 			local toCenter = Vector3.new(-bState.position.X, 0, -bState.position.Z).Unit
 			if toCenter == toCenter then -- NaN guard: .Unit is NaN when Bey is exactly at centre
 				bState.velocity += toCenter * bowlForce * subDt
+					* (bState.mods.Defense * 0.75 + bState.mods.Agility * 0.25)
 			end
 
 			-- 6. Command steering forces
@@ -181,15 +202,18 @@ function PhysicsController.OnPhysicsPhase(matchState)
 
 			if opponentState then
 				local cmd = bState.currentCommand
+				-- Agility scales command steering force → more responsive maneuvers
+				-- (ADR-003). Neutral Agility == 1 → identical to baseline.
+				local agility = bState.mods.Agility
 				if cmd == "Attack" then
 					local toOpponent = (opponentState.position - bState.position).Unit
 					if toOpponent == toOpponent then -- NaN guard: positions identical when beys overlap perfectly
-						bState.velocity += toOpponent * Constants.CommandAttackForce * subDt
+						bState.velocity += toOpponent * Constants.CommandAttackForce * subDt * agility
 					end
 				elseif cmd == "Defend" then
 					-- Stacks with BowlForce for a stronger centre pull
 					if toCenter == toCenter then
-						bState.velocity += toCenter * Constants.CommandDefendForce * subDt
+						bState.velocity += toCenter * Constants.CommandDefendForce * subDt * agility
 					end
 				elseif cmd == "Evade" then
 					-- Matador dodge: mostly sidestep, slight separation. A radial
@@ -208,7 +232,7 @@ function PhysicsController.OnPhysicsPhase(matchState)
 						local dodge = (awayFlat * Constants.EvadeRadialWeight
 							+ tangent * Constants.EvadeTangentialWeight).Unit
 						if dodge == dodge then
-							bState.velocity += dodge * Constants.CommandEvadeForce * subDt
+							bState.velocity += dodge * Constants.CommandEvadeForce * subDt * agility
 						end
 					end
 				end

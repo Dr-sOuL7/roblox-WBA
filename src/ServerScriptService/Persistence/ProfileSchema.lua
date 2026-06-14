@@ -11,6 +11,9 @@
 	  * SCHEMA_VERSION bumps only when a migration is added.
 ]=]
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local BeyParts = require(ReplicatedStorage:WaitForChild("BeyParts"))
+
 local ProfileSchema = {}
 
 ProfileSchema.SCHEMA_VERSION = 1
@@ -48,6 +51,12 @@ function ProfileSchema.defaults()
 		-- Phase 3/4 reservations
 		ownedCosmetics = {},
 		equippedCosmetics = { skin = "Default" },
+
+		-- Crafted Bey build (ADR-003). Default = neutral build = validated
+		-- baseline. reconcile() does NOT recurse into per-slot tables (they have
+		-- array-free dict shape), so a partial saved build is replaced wholesale
+		-- by clampBuild on load, not merged — see ProfileStore load path.
+		build = BeyParts.defaultBuild(),
 
 		settings = {},
 	}
