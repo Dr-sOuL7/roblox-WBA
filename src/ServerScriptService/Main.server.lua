@@ -61,6 +61,8 @@ require(script.Parent:WaitForChild("CosmeticsService"))
 -- a battle (director feature). ChallengeService wires HubService's prompts.
 local HubService = require(script.Parent:WaitForChild("HubService"))
 require(script.Parent:WaitForChild("ChallengeService"))
+-- Customization venue (ADR-003): workshop prompt + build save/validate
+local CustomizerService = require(script.Parent:WaitForChild("CustomizerService"))
 HubService.BuildHub()
 
 -- HEADLESS MODE: only runs in Studio when explicitly set to true.
@@ -88,6 +90,7 @@ else
                 return
             end
             MatchmakingService.PushProfileSummary(player.UserId)
+            CustomizerService.PushBuild(player.UserId) -- preload the editor's build
             if not resumedMatch then
                 -- Spawn as a walking character in the hub; the player starts a
                 -- battle by challenging someone (or the bot dummy). Ranked

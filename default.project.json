@@ -41,6 +41,9 @@
       "BeyParts": {
         "$path": "src/ReplicatedStorage/BeyParts.lua"
       },
+      "BeyModelBuilder": {
+        "$path": "src/ReplicatedStorage/BeyModelBuilder.lua"
+      },
       "Types": {
         "$path": "src/ReplicatedStorage/Types.lua"
       }

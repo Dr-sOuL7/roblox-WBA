@@ -20,9 +20,10 @@ local Players = game:GetService("Players")
 
 local HubService = {}
 
--- Registered by ChallengeService at init (avoids a require cycle)
+-- Registered by ChallengeService / CustomizerService at init (no require cycle)
 HubService.onPlayerChallenge = nil -- function(fromPlayer, toPlayer)
 HubService.onBotChallenge = nil    -- function(fromPlayer)
+HubService.onCustomize = nil       -- function(player)
 
 -- Hub geometry: a platform centred in front of the arena slots (which sit at
 -- x = 0, 200, 400, 600 on z ≈ 0). Players spawn here and can see the arenas.
@@ -116,6 +117,66 @@ function HubService.BuildHub()
 	label.Parent = billboard
 
 	HubService.SpawnBotDummy()
+	HubService.SpawnCustomizerStation()
+end
+
+-- ── Customization venue (approach → "Customize" prompt → editor) ──────────────
+
+function HubService.SpawnCustomizerStation()
+	local folder = getHubFolder()
+	if folder:FindFirstChild("CustomizerStation") then return end
+
+	local model = Instance.new("Model")
+	model.Name = "CustomizerStation"
+
+	local pad = Instance.new("Part")
+	pad.Name = "Pad"
+	pad.Anchored = true
+	pad.Size = Vector3.new(8, 1, 8)
+	pad.Position = HUB_CENTER + Vector3.new(40, 1.5, -10)
+	pad.Material = Enum.Material.Neon
+	pad.Color = Color3.fromRGB(120, 90, 220)
+	pad.Parent = model
+
+	local anvil = Instance.new("Part")
+	anvil.Name = "Anvil"
+	anvil.Anchored = true
+	anvil.Size = Vector3.new(3, 3, 3)
+	anvil.Position = pad.Position + Vector3.new(0, 2.5, 0)
+	anvil.Material = Enum.Material.Metal
+	anvil.Color = Color3.fromRGB(90, 70, 160)
+	anvil.Parent = model
+
+	local billboard = Instance.new("BillboardGui")
+	billboard.Size = UDim2.fromOffset(220, 50)
+	billboard.StudsOffset = Vector3.new(0, 3.5, 0)
+	billboard.AlwaysOnTop = true
+	billboard.Parent = anvil
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.GothamBold
+	label.TextScaled = true
+	label.TextColor3 = Color3.fromRGB(200, 170, 255)
+	label.TextStrokeTransparency = 0
+	label.Text = "CUSTOMIZE BEY"
+	label.Parent = billboard
+
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.Name = "CustomizePrompt"
+	prompt.ActionText = "Customize"
+	prompt.ObjectText = "Workshop"
+	prompt.HoldDuration = 0
+	prompt.MaxActivationDistance = CHALLENGE_DISTANCE
+	prompt.RequiresLineOfSight = false
+	prompt.Parent = anvil
+	prompt.Triggered:Connect(function(triggerer)
+		if HubService.onCustomize then
+			HubService.onCustomize(triggerer)
+		end
+	end)
+
+	model.Parent = folder
 end
 
 -- ── Bot challenge dummy ───────────────────────────────────────────────────────

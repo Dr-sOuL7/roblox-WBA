@@ -34,8 +34,8 @@ equal access** (no pay-to-win), **preset shapes only** (large catalog). Status:
 | Sim integration | ✅ Attack/Defense (collision push capped + stability dmg via guard²·⁵), Stamina (spin decay), Agility (steering + guard/centre-pull blend); neutral = no-op |
 | Live matches use builds | ✅ MatchManager derives mods from each profile's build |
 | No-dominant-build gate | ✅ `_G.RunBuildGate()` / runner `build` mode: clean A/D/S triangle (Def>Atk 62%, Atk>Sta 79%, Sta>Def 60%), no field sweep, ceiling 85% |
-| Customization venue + editor UI | ⬜ NEXT (Roblox-runtime; needs live verification) |
-| Crafted-model rendering in battle | ⬜ NEXT (build the 3D Bey from its parts) |
+| Customization venue + editor UI | ✅ done — `CustomizerUI` workshop editor (shape grid, height/weight/RGB sliders, live stat bars, spinning 3D preview); `CustomizerService` validates+persists |
+| Crafted-model rendering in battle | ✅ done — `BeyModelBuilder` (shared editor+battle); team-colour base ring is the identity channel |
 | Battle-feel VFX (clash/fly/stop) | ⬜ separate cycle |
 
 Known/accepted: pure-Agile vs a dedicated Stamina wall loses ~97% under bot

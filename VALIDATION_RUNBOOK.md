@@ -176,6 +176,23 @@ clients render both skins correctly mid-match; team blades stay red/blue and
 equip persists across rejoin; equip is rejected mid-match; the unknown-skin
 path falls back to Factory Steel.
 
+## Gate C1 — Customization venue (Studio Play Solo)
+
+Walk to the purple "CUSTOMIZE BEY" workshop pad in the hub → "Customize" prompt
+→ editor opens. PASS: 4 part tabs (Tip/Disc/Blade/Core); each shows a scrollable
+shape grid (★ = wild), height/weight/RGB sliders, a live 4-stat readout that
+shifts as you change parts (sum stays ~constant — the sidegrade), and a spinning
+3D preview that visibly changes shape/colour. Save → reopen → choices persisted.
+
+## Gate C2 — Craft affects battle (2 builds)
+
+Save a heavy-disc / round-blade build (Defense/Stamina) on one account and a
+spiky-blade / spike-tip build (Attack) on another. Battle them. PASS: the two
+Beys look visibly different in the arena; the matchup feels distinct from a
+mirror; `_G.RunBuildGate()` in the server console prints PASS (clean A/D/S
+triangle, no field sweep). Equipped builds load at match start (no mid-match
+edits — the workshop is unreachable without a hub character).
+
 ## Gate W3 — Neutrality audit mechanism
 After the session, run `_G.PrintNeutralityAudit()` in the server console.
 PASS: every skin worn this session appears with picks/decided/win-rate, and

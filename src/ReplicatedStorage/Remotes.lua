@@ -52,6 +52,7 @@ local Remotes = {
 	RequestEquip    = getOrCreateRemote("RequestEquip"),
 	RequestReady    = getOrCreateRemote("RequestReady"),
 	ChallengeResponse = getOrCreateRemote("ChallengeResponse"), -- C→S: accept/decline an invite
+	RequestSaveBuild  = getOrCreateRemote("RequestSaveBuild"),  -- C→S: persist a crafted build
 
 	-- Server to Client
 	MatchStateChanged   = getOrCreateRemote("MatchStateChanged"),
@@ -63,6 +64,8 @@ local Remotes = {
 	MmrUpdated          = getOrCreateRemote("MmrUpdated"),
 	ChallengeInvite     = getOrCreateRemote("ChallengeInvite"),  -- S→C: "X challenges you"
 	ChallengeStatus     = getOrCreateRemote("ChallengeStatus"),  -- S→C: sent/declined/expired/cancelled
+	OpenCustomizer      = getOrCreateRemote("OpenCustomizer"),   -- S→C: open the editor (with current build)
+	BuildData           = getOrCreateRemote("BuildData"),        -- S→C: the player's saved build
 }
 
 return Remotes

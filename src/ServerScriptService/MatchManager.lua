@@ -14,6 +14,7 @@ local MatchState = require(ReplicatedStorage:WaitForChild("MatchState"))
 local Stadiums = require(ReplicatedStorage:WaitForChild("Stadiums"))
 local Cosmetics = require(ReplicatedStorage:WaitForChild("Cosmetics"))
 local BeyParts = require(ReplicatedStorage:WaitForChild("BeyParts"))
+local BeyModelBuilder = require(ReplicatedStorage:WaitForChild("BeyModelBuilder"))
 local LaunchQuality = require(ReplicatedStorage:WaitForChild("LaunchQuality"))
 local TickManager = require(script.Parent:WaitForChild("TickManager"))
 local MatchInstance = require(script.Parent:WaitForChild("MatchInstance"))
@@ -188,90 +189,18 @@ end
 
 -- ── Bey models ────────────────────────────────────────────────────────────────
 
--- Create a highly visible multi-part Prototype Bey model at the arena origin.
--- Skin colors are COSMETIC ONLY (ring/disc/bit); team identity lives on the
--- blades (P1 red / P2 blue) so skins never blur whose Bey is whose.
-local function createPrototypeBeyModel(playerId: number, isPlayer1: boolean, parentFolder, origin, skinDef)
-	local model = Instance.new("Model")
-	model.Name = "Bey_" .. tostring(playerId)
-
-	-- 1. Primary Part (Pivot at the very bottom tip, offset to rest on the 0.4 thick floor)
-	local pivot = Instance.new("Part")
-	pivot.Name = "Pivot"
-	pivot.Size = Vector3.new(0.1, 0.1, 0.1)
-	pivot.Transparency = 1
-	pivot.Anchored = true
-	pivot.CanCollide = false
-	pivot.CFrame = CFrame.new(origin + Vector3.new(0, 0.2, 0))
-	pivot.Parent = model
-	model.PrimaryPart = pivot
-
+-- Build the player's CRAFTED Bey (ADR-003) at the arena origin. Shapes,
+-- heights, and per-part colours come from the build; a team-coloured base ring
+-- (P1 red / P2 blue) is the identity channel so per-part colours never blur
+-- whose Bey is whose.
+local function createBeyModel(playerId: number, isPlayer1: boolean, parentFolder, origin, buildSpec)
 	local teamColor = isPlayer1 and Color3.fromRGB(255, 50, 50) or Color3.fromRGB(50, 120, 255)
-
-	-- 2. Driver (Tip)
-	local driver = Instance.new("Part")
-	driver.Name = "Driver"
-	driver.Size = Vector3.new(1.5, 1.5, 1.5)
-	driver.Shape = Enum.PartType.Cylinder
-	driver.CFrame = pivot.CFrame * CFrame.new(0, 0.75, 0) * CFrame.Angles(0, 0, math.rad(90))
-	driver.Color = Color3.fromRGB(40, 40, 40)
-	driver.Anchored = true
-	driver.CanCollide = false
-	driver.Parent = model
-
-	-- 3. Weight Disc
-	local disc = Instance.new("Part")
-	disc.Name = "WeightDisc"
-	disc.Size = Vector3.new(0.8, 3.5, 3.5)
-	disc.Shape = Enum.PartType.Cylinder
-	disc.CFrame = pivot.CFrame * CFrame.new(0, 1.9, 0) * CFrame.Angles(0, 0, math.rad(90))
-	disc.Color = skinDef.discColor
-	disc.Material = Enum.Material.Metal
-	disc.Anchored = true
-	disc.CanCollide = false
-	disc.Parent = model
-
-	-- 4. Attack Ring
-	local ring = Instance.new("Part")
-	ring.Name = "AttackRing"
-	ring.Size = Vector3.new(1.2, 5.0, 5.0)
-	ring.Shape = Enum.PartType.Cylinder
-	ring.CFrame = pivot.CFrame * CFrame.new(0, 2.9, 0) * CFrame.Angles(0, 0, math.rad(90))
-	ring.Color = skinDef.ringColor
-	ring.Material = Enum.Material.SmoothPlastic
-	ring.Anchored = true
-	ring.CanCollide = false
-	ring.Parent = model
-
-	-- 5. Blades/Notches (4 protruding blocks to make spin hyper-visible)
-	for i = 1, 4 do
-		local blade = Instance.new("Part")
-		blade.Name = "Blade_" .. i
-		blade.Size = Vector3.new(1.2, 2.0, 2.5)
-		blade.Color = teamColor -- team identity channel (P1 red / P2 blue)
-		blade.Anchored = true
-		blade.CanCollide = false
-		blade.CFrame = pivot.CFrame
-			* CFrame.new(0, 2.9, 0)
-			* CFrame.Angles(0, math.rad(i * 90), 0)
-			* CFrame.new(0, 0, -2.8)
-		blade.Parent = model
-	end
-
-	-- Center graphic / Bit Beast placeholder
-	local bit = Instance.new("Part")
-	bit.Name = "BitChip"
-	bit.Size = Vector3.new(0.2, 2.0, 2.0)
-	bit.Shape = Enum.PartType.Cylinder
-	bit.CFrame = pivot.CFrame * CFrame.new(0, 3.6, 0) * CFrame.Angles(0, 0, math.rad(90))
-	bit.Color = skinDef.bitColor
-	bit.Material = Enum.Material.Neon
-	bit.Anchored = true
-	bit.CanCollide = false
-	bit.Parent = model
-
+	local model = BeyModelBuilder.build(buildSpec, origin + Vector3.new(0, 0.2, 0), {
+		name = "Bey_" .. tostring(playerId),
+		teamColor = teamColor,
+	})
 	model.Parent = parentFolder
-	print(string.format("[Match] Prototype Bey spawned for player %d (Player 1: %s)", playerId, tostring(isPlayer1)))
+	print(string.format("[Match] Crafted Bey spawned for player %d (Player 1: %s)", playerId, tostring(isPlayer1)))
 	return model
 end
 
@@ -393,22 +322,24 @@ function MatchManager.StartNewMatch(playerIds, options)
 		bState.position = Vector3.new(side * spawnRadius, Constants.LaunchHeightDefault, 0)
 		bState.velocity = Vector3.new(0, 0, 0)
 		bState.previousPosition = bState.position
-		-- Craft modifiers from the player's equipped build (ADR-003). Bots and
-		-- profile-less sessions stay neutral (createBeyState default 1.0).
+		-- Resolve the player's crafted build (ADR-003). Bots and profile-less
+		-- sessions use the neutral default → mods stay 1.0 (validated baseline).
+		local buildSpec = BeyParts.defaultBuild()
 		if not (newState.bots and newState.bots[pid]) then
 			local profile = ProfileStore.GetProfile(pid)
 			if profile and profile.build then
-				bState.mods = BeyParts.deriveStats(profile.build).multipliers
+				buildSpec = profile.build
 			end
 		end
+		bState.mods = BeyParts.deriveStats(buildSpec).multipliers
 		newState.beyStates[pid] = bState
 		newState.pendingAim[pid] = LaunchQuality.defaultAimFor(side)
 
-		-- Build the model AT its spawn point so it is visible immediately,
+		-- Build the CRAFTED model AT its spawn point so it is visible immediately,
 		-- before the first snapshot drives the renderer
-		createPrototypeBeyModel(pid, i == 1, folder,
+		createBeyModel(pid, i == 1, folder,
 			origin + Vector3.new(side * spawnRadius, Constants.LaunchHeightDefault, 0),
-			Cosmetics.get(newState.cosmetics[pid]))
+			buildSpec)
 	end
 
 	setMatchFocus(playerIds, focusPart)
