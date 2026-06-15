@@ -70,10 +70,13 @@ panelLayout.VerticalAlignment = Enum.VerticalAlignment.Center
 panelLayout.Padding = UDim.new(0, 10)
 panelLayout.Parent = commandPanel
 
+-- Player-facing labels describe what the steering force DOES so intent is
+-- obvious (TOWARDS the opponent / to the CENTRE / AWAY from the opponent).
+-- `name` stays the wire/physics id (Attack/Defend/Evade) the server validates.
 local COMMAND_DEFS = {
-	{ name = "Attack",  label = "ATTACK",  color = Color3.fromRGB(220, 50,  50)  },
-	{ name = "Defend",  label = "DEFEND",  color = Color3.fromRGB(50,  100, 220) },
-	{ name = "Evade",   label = "EVADE",   color = Color3.fromRGB(50,  200, 80)  },
+	{ name = "Attack",  label = "TOWARDS", desc = "lunge at opponent",  color = Color3.fromRGB(220, 50,  50)  },
+	{ name = "Defend",  label = "CENTRE",  desc = "pull to the middle", color = Color3.fromRGB(50,  100, 220) },
+	{ name = "Evade",   label = "AWAY",    desc = "dodge away",         color = Color3.fromRGB(50,  200, 80)  },
 }
 
 local buttons = {}
@@ -115,11 +118,20 @@ local function createButton(def)
 		commandCooldownTimer = 0
 	end)
 
-	buttons[def.name] = { button = btn, baseColor = def.color }
+	buttons[def.name] = { button = btn, baseColor = def.color, label = def.label, desc = def.desc }
 end
 
 for _, def in ipairs(COMMAND_DEFS) do
 	createButton(def)
+end
+
+-- Human-readable text for the active-command banner ("TOWARDS — lunge at opponent")
+local function describeActive(cmdName)
+	local e = buttons[cmdName]
+	if e then
+		return e.label .. (e.desc and ("  —  " .. e.desc) or "")
+	end
+	return string.upper(cmdName)
 end
 
 -- Active command label (shows which command is running)
@@ -764,24 +776,24 @@ RunService.RenderStepped:Connect(function(dt)
 			if isActive then
 				btn.BackgroundColor3 = Color3.new(1, 1, 1)
 				btn.TextColor3 = entry.baseColor
-				btn.Text = string.format("%s (%.1f)", string.upper(cmdName), commandActiveTimer)
+				btn.Text = string.format("%s (%.1f)", entry.label, commandActiveTimer)
 				btn.BackgroundTransparency = 0
 			elseif isCooling then
 				btn.BackgroundColor3 = entry.baseColor
 				btn.TextColor3 = Color3.fromRGB(180, 180, 180)
-				btn.Text = string.upper(cmdName)
+				btn.Text = entry.label
 				btn.BackgroundTransparency = 0.55
 			else
 				btn.BackgroundColor3 = entry.baseColor
 				btn.TextColor3 = Color3.new(1, 1, 1)
-				btn.Text = string.upper(cmdName)
+				btn.Text = entry.label
 				btn.BackgroundTransparency = 0
 			end
 		end
 
 		-- Active command label
 		if activeCommand then
-			activeCommandLabel.Text = "► " .. string.upper(activeCommand)
+			activeCommandLabel.Text = "► " .. describeActive(activeCommand)
 		elseif commandCooldownTimer > 0 then
 			activeCommandLabel.Text = string.format("Cooldown: %.1fs", commandCooldownTimer)
 		else

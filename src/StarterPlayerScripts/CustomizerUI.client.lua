@@ -39,15 +39,45 @@ dim.BackgroundColor3 = Color3.new(0, 0, 0)
 dim.BackgroundTransparency = 0.4
 dim.Parent = gui
 
+local PANEL_W, PANEL_H = 820, 470
+
 local panel = Instance.new("Frame")
-panel.Size = UDim2.fromOffset(820, 470)
-panel.Position = UDim2.new(0.5, -410, 0.5, -235)
+panel.Size = UDim2.fromOffset(PANEL_W, PANEL_H)
+-- Centre by anchor so the UIScale below shrinks the panel about its middle and
+-- it stays fully on-screen on phones (the old negative-offset layout overflowed).
+panel.AnchorPoint = Vector2.new(0.5, 0.5)
+panel.Position = UDim2.fromScale(0.5, 0.5)
 panel.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
 panel.BorderSizePixel = 0
 panel.Parent = dim
 local panelCorner = Instance.new("UICorner")
 panelCorner.CornerRadius = UDim.new(0, 14)
 panelCorner.Parent = panel
+
+-- Fit-to-screen: scale the whole editor down so nothing is clipped on small
+-- (mobile) viewports, while never enlarging past its designed size on desktop.
+local panelScale = Instance.new("UIScale")
+panelScale.Parent = panel
+
+local function fitToViewport()
+	local cam = workspace.CurrentCamera
+	if not cam then return end
+	local vp = cam.ViewportSize
+	if vp.X < 1 or vp.Y < 1 then return end
+	local margin = 24
+	local s = math.min(1, (vp.X - margin) / PANEL_W, (vp.Y - margin) / PANEL_H)
+	panelScale.Scale = math.max(0.45, s)
+end
+
+local function bindCamera()
+	fitToViewport()
+	local cam = workspace.CurrentCamera
+	if cam then
+		cam:GetPropertyChangedSignal("ViewportSize"):Connect(fitToViewport)
+	end
+end
+workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(bindCamera)
+bindCamera()
 
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, -20, 0, 36)
@@ -398,6 +428,7 @@ end)
 Remotes.OpenCustomizer.OnClientEvent:Connect(function(build)
 	workingBuild = deepCopyBuild(build)
 	gui.Enabled = true
+	fitToViewport()
 	selectSlot("Tip")
 	refreshStats()
 	rebuildPreview()

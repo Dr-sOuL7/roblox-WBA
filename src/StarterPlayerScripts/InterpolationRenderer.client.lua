@@ -2,7 +2,8 @@
 	InterpolationRenderer.client.lua
 	Buffers server snapshots and smoothly lerps Bey CFrame states at render rate.
 	Handles: spin rotation, tilt amplification, hitstop, spin-down audio,
-	         command-state glow (Attack/Defend/Evade), ring-out danger pulse.
+	         command-state glow + motion trail (TOWARDS/CENTRE/AWAY),
+	         ring-out danger pulse.
 ]=]
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -93,6 +94,44 @@ local function ensureRingOutBox(pid, model)
 	vis.ringOutBox = box
 	return box
 end
+
+-- Motion trail: draws the Bey's actual path so movement reads as movement (not
+-- "spin then stop"). Tinted by the active command for at-a-glance feedback.
+local function ensureTrail(pid, model)
+	local vis = beyVisuals[pid]
+	if not isDead(vis.trail) then return vis.trail end
+	local pivot = model:FindFirstChild("Pivot") or model.PrimaryPart
+	if not pivot then return nil end
+	local a0 = Instance.new("Attachment")
+	a0.Name = "TrailTop"
+	a0.Position = Vector3.new(0, 1.2, 0)
+	a0.Parent = pivot
+	local a1 = Instance.new("Attachment")
+	a1.Name = "TrailBottom"
+	a1.Position = Vector3.new(0, -0.8, 0)
+	a1.Parent = pivot
+	local trail = Instance.new("Trail")
+	trail.Name = "MotionTrail"
+	trail.Attachment0 = a0
+	trail.Attachment1 = a1
+	trail.Lifetime = 0.35
+	trail.MinLength = 0.05
+	trail.LightEmission = 0.5
+	trail.FaceCamera = true
+	trail.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.25),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	trail.WidthScale = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(1, 0),
+	})
+	trail.Parent = pivot
+	vis.trail = trail
+	return trail
+end
+
+local TRAIL_NEUTRAL = Color3.fromRGB(180, 210, 255)
 
 -- ── Command glow colours ──────────────────────────────────────────────────────
 
@@ -253,15 +292,22 @@ RunService.RenderStepped:Connect(function(dt)
 			model:PivotTo(CFrame.new(pos + arenaOrigin) * CFrame.Angles(tiltAngle, vis.rotation, 0))
 
 			-- ── Command glow ──────────────────────────────────────────────
+			local cmd = bState0.currentCommand
+			local cmdStyle = cmd and COMMAND_GLOW[cmd] or nil
 			local glow = ensureCommandGlow(pid, model)
 			if glow then
-				local cmd = bState0.currentCommand
-				if cmd and COMMAND_GLOW[cmd] then
-					glow.Color = COMMAND_GLOW[cmd].color
-					glow.Brightness = COMMAND_GLOW[cmd].brightness
+				if cmdStyle then
+					glow.Color = cmdStyle.color
+					glow.Brightness = cmdStyle.brightness
 				else
 					glow.Brightness = 0
 				end
+			end
+
+			-- Motion trail tinted by the active command (TOWARDS/CENTRE/AWAY)
+			local trail = ensureTrail(pid, model)
+			if trail then
+				trail.Color = ColorSequence.new(cmdStyle and cmdStyle.color or TRAIL_NEUTRAL)
 			end
 
 			-- ── Ring-out danger pulse ─────────────────────────────────────
