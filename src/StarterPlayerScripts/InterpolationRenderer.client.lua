@@ -9,6 +9,7 @@ local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
+local Stadiums = require(ReplicatedStorage:WaitForChild("Stadiums"))
 
 local snapshotBuffer = {}
 local RENDER_DELAY = Constants.InterpolationDelay
@@ -22,6 +23,7 @@ local beyVisuals = {}
 -- simulation is local-space — rendering adds the match's arena origin.
 local currentMatchId = nil
 local arenaOrigin = Vector3.new(0, 0, 0)
+local bowlSphereRadius = Constants.BowlSphereRadius -- bowl curvature for the surface clamp
 local matchFolder = nil
 
 local missingModelWarned = {} -- "matchId:pid" -> true (one diagnostic per Bey per match)
@@ -206,6 +208,8 @@ Remotes.StateSnapshot.OnClientEvent:Connect(function(snapshot)
 	if snapshot.matchId ~= currentMatchId then
 		currentMatchId = snapshot.matchId
 		arenaOrigin = snapshot.arenaOrigin or Vector3.new(0, 0, 0)
+		bowlSphereRadius = (snapshot.stadiumId and Stadiums.get(snapshot.stadiumId).bowlSphereRadius)
+			or Constants.BowlSphereRadius
 		matchFolder = nil
 		table.clear(snapshotBuffer)
 	end
@@ -284,6 +288,18 @@ RunService.RenderStepped:Connect(function(dt)
 				local bState1 = snap1.beyStates[pid]
 				if bState1 then
 					pos = bState0.position:Lerp(bState1.position, alpha)
+				end
+			end
+
+			-- Keep the Bey's tip ON the bowl surface, never inside it. The sim floor
+			-- is y = R - sqrt(R^2 - r^2); a straight lerp between two grounded
+			-- snapshots cuts under the curve, so clamp the rendered height up to the
+			-- surface. Anything above is left alone, so pops and jumps still read as air.
+			local r2 = pos.X * pos.X + pos.Z * pos.Z
+			if r2 < bowlSphereRadius * bowlSphereRadius then
+				local surfaceY = bowlSphereRadius - math.sqrt(bowlSphereRadius * bowlSphereRadius - r2)
+				if pos.Y < surfaceY then
+					pos = Vector3.new(pos.X, surfaceY, pos.Z)
 				end
 			end
 

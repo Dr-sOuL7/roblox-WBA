@@ -113,41 +113,49 @@ local function buildStadiumTemplate(stadiumDef)
 
 	local R = stadiumDef.bowlSphereRadius
 	local MAX_R = stadiumDef.playableRadius
+	-- Outer edge sits a little beyond the playable radius, so the visible round
+	-- wall is past the ring-out boundary (a Bey rings out before it reaches it).
+	local outerR = MAX_R + 3
+	local DISH_HEIGHT = 12
+	local DISH_Y = 5 -- centre height: top face Y=11, bottom Y=-1, bowl centre Y=0
 
-	-- ── Create a massive block to carve the bowl into ──────────
-	local block = Instance.new("Part")
-	block.Name = "StadiumFloor"
-	block.Size = Vector3.new(MAX_R * 2 + 6, 12, MAX_R * 2 + 6)
-	-- Center it so the top surface rests at Y = 11, and bottom at Y = -1
-	block.CFrame = CFrame.new(0, 5, 0)
+	-- Round dish blank: a vertical CYLINDER gives the circular outer edge. A
+	-- Roblox Cylinder lies along its X axis, so rotate it 90 about Z to stand it
+	-- upright; Size.X is then the height and Size.Y/Z the diameter.
+	local dishCFrame = CFrame.new(0, DISH_Y, 0) * CFrame.Angles(0, 0, math.rad(90))
+	local dish = Instance.new("Part")
+	dish.Name = "StadiumFloor"
+	dish.Shape = Enum.PartType.Cylinder
+	dish.Size = Vector3.new(DISH_HEIGHT, outerR * 2, outerR * 2)
+	dish.CFrame = dishCFrame
 
-	-- ── Create a sphere to subtract from the block ──────────
+	-- Sphere to carve the seamless, smooth bowl into the dish. Centred R studs
+	-- up so its lowest point kisses Y=0 (bowl centre); the carved surface is
+	-- exactly y = R - sqrt(R^2 - r^2), matching the simulation floor.
 	local sphere = Instance.new("Part")
 	sphere.Shape = Enum.PartType.Ball
 	sphere.Size = Vector3.new(R * 2, R * 2, R * 2)
-	-- Center the sphere exactly R studs above 0, so the lowest tip touches Y=0
 	sphere.CFrame = CFrame.new(0, R, 0)
 
-	-- Generate the smooth curvy bowl using CSG Solid Modeling.
-	-- Inputs are parented while the operation runs (CSG can fail on
-	-- out-of-DataModel parts in some engine paths), then discarded.
-	block.Anchored = true
+	-- Generate the smooth bowl via CSG. Inputs are parented while the operation
+	-- runs (CSG can fail on out-of-DataModel parts in some engine paths).
+	dish.Anchored = true
 	sphere.Anchored = true
-	block.Parent = workspace
+	dish.Parent = workspace
 	sphere.Parent = workspace
 	local success, curvyBowl = pcall(function()
-		return block:SubtractAsync({ sphere }, Enum.CollisionFidelity.Default, Enum.RenderFidelity.Precise)
+		return dish:SubtractAsync({ sphere }, Enum.CollisionFidelity.Default, Enum.RenderFidelity.Precise)
 	end)
 	sphere:Destroy()
 	if success and curvyBowl then
-		block:Destroy()
+		dish:Destroy()
 	else
-		block.Parent = nil -- keep as the visual fallback below
+		dish.Parent = nil -- keep the round cylinder as the visual fallback below
 	end
 
 	if not success or not curvyBowl then
-		warn("[MatchManager] Failed to generate curvy stadium (CSG error); falling back to flat floor.")
-		curvyBowl = block -- visual-only fallback; simulation is unaffected
+		warn("[MatchManager] Failed to carve curvy bowl (CSG error); falling back to a flat round dish.")
+		curvyBowl = dish -- round outer edge is preserved even on CSG failure
 	end
 
 	curvyBowl.Name = "StadiumFloor"
@@ -158,7 +166,10 @@ local function buildStadiumTemplate(stadiumDef)
 
 	local template = Instance.new("Model")
 	template.Name = "StadiumTemplate"
-	curvyBowl.CFrame = CFrame.new(0, 5, 0)
+	-- SubtractAsync returns the union at the dish's CFrame (rotation included),
+	-- so leave it untouched: the carved geometry is already in place. (The old
+	-- square-block path reset it to (0,5,0); doing that to a rotated union would
+	-- wrongly re-orient it, so we don't.)
 	curvyBowl.Parent = template
 	template.PrimaryPart = curvyBowl
 

@@ -14,6 +14,7 @@ local DebugStatePublisher = {}
 function DebugStatePublisher.OnReplicationPhase(matchState)
     local snapshot = {
         matchId = matchState.matchId,
+        stadiumId = matchState.stadiumId,
         arenaOrigin = matchState.arenaOrigin,
         tickNumber = matchState.tickNumber,
         serverTimestamp = matchState.serverTimestamp,
