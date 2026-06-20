@@ -34,7 +34,11 @@ Remotes.StateSnapshot.OnClientEvent:Connect(function(snapshot)
         display ..= string.format(" Pos: %.1f, %.1f, %.1f\n", bState.position.X, bState.position.Y, bState.position.Z)
         display ..= string.format(" Vel: %.1f, %.1f, %.1f\n", bState.velocity.X, bState.velocity.Y, bState.velocity.Z)
         display ..= string.format(" RPM: %.1f | Tilt: %.1f\n", bState.angularVelocity.Magnitude, bState.tilt)
-        display ..= string.format(" Stability: %.1f\n\n", bState.stability)
+        if bState.hp ~= nil then
+            display ..= string.format(" HP: %.0f/%.0f | Mana: %.0f\n", bState.hp, bState.maxHp or 0, bState.mana or 0)
+        end
+        local abil = (bState.isDashing and "DASH " or "") .. (bState.isRevolving and "REVOLVE" or "")
+        display ..= string.format(" Face: %.2f %s\n\n", bState.facingAngle or 0, abil)
     end
     
     for _, ev in ipairs(snapshot.events) do

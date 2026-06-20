@@ -12,8 +12,9 @@ function CollisionClassifier.ResetTickCounter()
     tickSequenceCounter = 0
 end
 
--- Called by PhysicsController after an overlap resolves
-function CollisionClassifier.Classify(matchState, beyA, beyB, severityClass, contactPosition)
+-- Called by PhysicsController after an overlap resolves.
+-- `zones` (optional): { zoneOnA, zoneOnB } — which part-zone each Bey was struck on.
+function CollisionClassifier.Classify(matchState, beyA, beyB, severityClass, contactPosition, zones)
     tickSequenceCounter += 1
 
     local minId, maxId = math.min(beyA.playerId, beyB.playerId), math.max(beyA.playerId, beyB.playerId)
@@ -27,7 +28,9 @@ function CollisionClassifier.Classify(matchState, beyA, beyB, severityClass, con
             tickNumber = matchState.tickNumber,
             involvedBeys = {beyA.playerId, beyB.playerId},
             collisionClass = severityClass,
-            position = contactPosition
+            position = contactPosition,
+            zoneOnA = zones and zones.zoneOnA or nil,
+            zoneOnB = zones and zones.zoneOnB or nil,
         }
     })
 end

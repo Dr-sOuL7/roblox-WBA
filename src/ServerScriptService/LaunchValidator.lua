@@ -59,14 +59,18 @@ function LaunchValidator.ValidateAndQueue(player, sequenceId, launchData)
 		return
 	end
 
-	-- Sanitise inputs
-	local vector = launchData and launchData.launchVector or Vector3.new(0, 0, 0)
-	local power  = launchData and launchData.spinPower   or 50
-
-	if vector.Magnitude > Constants.VelocityClampMax then
-		vector = vector.Unit * Constants.VelocityClampMax
-	end
+	-- Flat-spawn launch: spin power, an optional facing, and a timing-based quality.
+	local power = (launchData and tonumber(launchData.spinPower)) or Constants.LaunchBaseSpin
 	power = math.clamp(power, 0, 200)
+
+	local facing = launchData and tonumber(launchData.facingAngle) or nil
+	if facing ~= nil and (facing ~= facing) then
+		facing = nil -- reject NaN
+	end
+
+	-- Launch quality bounded to ±LaunchBonusCap so it can never dominate.
+	local quality = (launchData and tonumber(launchData.launchQuality)) or 1.0
+	quality = math.clamp(quality, 1 - Constants.LaunchBonusCap, 1 + Constants.LaunchBonusCap)
 
 	-- Mark consumed before queuing to prevent race conditions
 	bState.launchConsumed = true
@@ -75,8 +79,9 @@ function LaunchValidator.ValidateAndQueue(player, sequenceId, launchData)
 		inputSequenceId = sequenceId,
 		playerId = player.UserId,
 		data = {
-			launchVector = vector,
 			spinPower = power,
+			facingAngle = facing,
+			launchQuality = quality,
 		},
 	})
 

@@ -1,6 +1,8 @@
 --[=[
 	BeyController.lua
-	Processes validated input queues (launch + commands) and manages command timers.
+	Applies validated inputs to BeyStates during the Input phase:
+	  • Launch ("GO") inputs — spin the Bey up and set its initial facing.
+	  • Continuous analog input — joystick facing + Dash/Revolve held-state.
 ]=]
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
@@ -9,43 +11,42 @@ local TickManager = require(script.Parent:WaitForChild("TickManager"))
 local BeyController = {}
 
 function BeyController.OnInputPhase(matchState)
-	-- ── Launch inputs ─────────────────────────────────────────────────────────
+	-- ── Launch / GO inputs ─────────────────────────────────────────────────────
 	for _, inputEvent in ipairs(matchState.inputQueue) do
 		local pid = inputEvent.playerId
 		local bState = matchState.beyStates[pid]
-		if bState then
-			bState.velocity = inputEvent.data.launchVector
-			bState.angularVelocity = Vector3.new(0, inputEvent.data.spinPower, 0)
+		if bState and bState.zoneState ~= "Finished" then
+			-- Spin up (Stamina extends spin; launch quality is a small bonus).
+			local quality = inputEvent.data.launchQuality or 1.0
+			bState.angularVelocity = Vector3.new(0, inputEvent.data.spinPower * quality * bState.mods.Stamina, 0)
+			bState.launchQuality = quality
+			if inputEvent.data.facingAngle then
+				bState.facingAngle = inputEvent.data.facingAngle
+				bState.targetFacing = inputEvent.data.facingAngle
+			end
 		end
 	end
 	table.clear(matchState.inputQueue)
 
-	-- ── Command inputs ────────────────────────────────────────────────────────
-	for _, cmdEvent in ipairs(matchState.commandQueue) do
-		local bState = matchState.beyStates[cmdEvent.playerId]
-		if bState and bState.commandTimer == 0 and bState.commandCooldownTimer == 0 then
-			bState.currentCommand = cmdEvent.command
-			bState.commandTimer = Constants.CommandDurationTicks
-			table.insert(matchState.tickEvents, {
-				eventType = "CommandIssued",
-				eventData = { playerId = cmdEvent.playerId, command = cmdEvent.command },
-			})
-		end
-	end
-	table.clear(matchState.commandQueue)
-
-	-- ── Command timer tick ────────────────────────────────────────────────────
+	-- ── Continuous analog input ─────────────────────────────────────────────────
 	for _, pid in ipairs(matchState.playerOrder) do
 		local bState = matchState.beyStates[pid]
+		if bState.zoneState == "Finished" then continue end
 
-		if bState.commandTimer > 0 then
-			bState.commandTimer -= 1
-			if bState.commandTimer == 0 then
-				bState.currentCommand = nil
-				bState.commandCooldownTimer = Constants.CommandCooldownTicks
+		local packet = matchState.inputBuffer[pid]
+		if packet then
+			bState.targetFacing = packet.facingAngle
+			-- Authoritative Mana gate: no Mana → abilities forced off.
+			if bState.mana > 0 then
+				bState.isDashing = packet.dash
+				bState.isRevolving = packet.revolve
+			else
+				bState.isDashing = false
+				bState.isRevolving = false
 			end
-		elseif bState.commandCooldownTimer > 0 then
-			bState.commandCooldownTimer -= 1
+		elseif bState.mana <= 0 then
+			bState.isDashing = false
+			bState.isRevolving = false
 		end
 	end
 end

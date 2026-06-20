@@ -1,8 +1,8 @@
 --[=[
 	InterpolationRenderer.client.lua
-	Buffers server snapshots and smoothly lerps Bey CFrame states at render rate.
-	Handles: spin rotation, tilt amplification, hitstop, spin-down audio,
-	         command-state glow (Attack/Defend/Evade), ring-out danger pulse.
+	Buffers server snapshots and lerps Bey CFrames at render rate.
+	Handles: position interpolation, spin rotation, tilt, facing indicator,
+	Dash/Revolve glow, hitstop, collision audio and spin-down audio.
 ]=]
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -12,63 +12,54 @@ local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
 local snapshotBuffer = {}
 local RENDER_DELAY = Constants.InterpolationDelay
 local SNAPSHOT_BUFFER_MAX = Constants.SnapshotBufferMax
+local TWO_PI = math.pi * 2
 
 -- Per-player visual state
--- { rotation, hitstop, commandGlow (PointLight), ringOutBox (SelectionBox) }
 local beyVisuals = {}
 
 local function getBeyModel(pid)
 	return workspace:FindFirstChild("Bey_" .. tostring(pid))
 end
 
--- Lazily create and attach visual effect instances to the Bey model.
 local function ensureVisuals(pid)
 	if beyVisuals[pid] then return beyVisuals[pid] end
-	beyVisuals[pid] = { rotation = 0, hitstop = 0, commandGlow = nil, ringOutBox = nil }
+	beyVisuals[pid] = { rotation = 0, hitstop = 0, facing = 0, facingInit = false }
 	return beyVisuals[pid]
 end
 
-local function ensureCommandGlow(pid, model)
+local function ensureAbilityGlow(pid, model)
 	local vis = beyVisuals[pid]
-	if vis.commandGlow then return vis.commandGlow end
+	if vis.glow then return vis.glow end
 	local pivot = model:FindFirstChild("Pivot") or model.PrimaryPart
 	if not pivot then return nil end
 	local light = Instance.new("PointLight")
-	light.Name = "CommandGlow"
+	light.Name = "AbilityGlow"
 	light.Brightness = 0
-	light.Range = 16
+	light.Range = 18
 	light.Shadows = false
 	light.Parent = pivot
-	vis.commandGlow = light
+	vis.glow = light
 	return light
 end
 
-local function ensureRingOutBox(pid, model)
+-- A small neon arrow that shows facing WITHOUT spinning with the Bey body.
+local function ensureFacingArrow(pid, model)
 	local vis = beyVisuals[pid]
-	if vis.ringOutBox then return vis.ringOutBox end
-	local box = Instance.new("SelectionBox")
-	box.Name = "RingOutWarning"
-	box.Color3 = Color3.fromRGB(255, 60, 0)
-	box.LineThickness = 0.08
-	box.SurfaceTransparency = 0.85
-	box.SurfaceColor3 = Color3.fromRGB(255, 60, 0)
-	box.Visible = false
-	box.Adornee = model
-	box.Parent = model
-	vis.ringOutBox = box
-	return box
+	if vis.arrow then return vis.arrow end
+	local arrow = Instance.new("Part")
+	arrow.Name = "FacingArrow"
+	arrow.Size = Vector3.new(0.4, 0.4, 2.4)
+	arrow.Anchored = true
+	arrow.CanCollide = false
+	arrow.CanQuery = false
+	arrow.Material = Enum.Material.Neon
+	arrow.Color = Color3.fromRGB(255, 255, 255)
+	arrow.Parent = model
+	vis.arrow = arrow
+	return arrow
 end
 
--- ── Command glow colours ──────────────────────────────────────────────────────
-
-local COMMAND_GLOW = {
-	Attack = { color = Color3.fromRGB(255, 60,  60),  brightness = 3 },
-	Defend = { color = Color3.fromRGB(60,  100, 255), brightness = 3 },
-	Evade  = { color = Color3.fromRGB(60,  220, 60),  brightness = 3 },
-}
-
 -- ── Collision audio ───────────────────────────────────────────────────────────
-
 local COLLISION_SOUNDS = {
 	Light = { id = "", pitch = 1.3, volume = 0.25 },
 	Heavy = { id = "", pitch = 1.0, volume = 0.6 },
@@ -77,7 +68,7 @@ local COLLISION_SOUNDS = {
 
 local function playCollisionSound(severity)
 	local cfg = COLLISION_SOUNDS[severity] or COLLISION_SOUNDS.Light
-	if cfg.id == "" then return end -- no asset id assigned yet; skip to avoid console errors
+	if cfg.id == "" then return end
 	local sound = Instance.new("Sound")
 	sound.SoundId = cfg.id
 	sound.PlaybackSpeed = cfg.pitch
@@ -88,7 +79,6 @@ local function playCollisionSound(severity)
 end
 
 -- ── Spin-down audio ───────────────────────────────────────────────────────────
-
 local spinDownSounds = {}
 
 local function updateSpinDownAudio(pid, angMag)
@@ -121,7 +111,6 @@ local function updateSpinDownAudio(pid, angMag)
 end
 
 -- ── Snapshot receive ──────────────────────────────────────────────────────────
-
 Remotes.StateSnapshot.OnClientEvent:Connect(function(snapshot)
 	table.insert(snapshotBuffer, snapshot)
 	if #snapshotBuffer > SNAPSHOT_BUFFER_MAX then
@@ -148,12 +137,42 @@ Remotes.StateSnapshot.OnClientEvent:Connect(function(snapshot)
 	end
 end)
 
+-- ── Angular lerp helper ─────────────────────────────────────────────────────────
+local function lerpAngle(a, b, t)
+	local diff = (b - a + math.pi) % TWO_PI - math.pi
+	return a + diff * t
+end
+
+-- ── Ability glow colours ──────────────────────────────────────────────────────
+local function applyAbilityGlow(glow, isDashing, isRevolving)
+	if not glow then return end
+	if isDashing and isRevolving then
+		glow.Color = Color3.fromRGB(255, 90, 230) -- combo: magenta
+		glow.Brightness = 4
+	elseif isDashing then
+		glow.Color = Color3.fromRGB(255, 110, 40) -- dash: orange
+		glow.Brightness = 4
+	elseif isRevolving then
+		glow.Color = Color3.fromRGB(120, 90, 255) -- revolve: purple
+		glow.Brightness = 3.5
+	else
+		glow.Brightness = 0
+	end
+end
+
+-- ── New-match reset ─────────────────────────────────────────────────────────────
+-- Old Bey models (and their child glow/arrow/sounds) are destroyed during cleanup,
+-- so just drop the stale references; they'll be recreated for the new models.
+Remotes.MatchStateChanged.OnClientEvent:Connect(function(phase)
+	if phase == "Countdown" then
+		table.clear(snapshotBuffer)
+		table.clear(beyVisuals)
+		table.clear(spinDownSounds)
+	end
+end)
+
 -- ── Render loop ───────────────────────────────────────────────────────────────
-
-local ringOutPulseTime = 0
-
 RunService.RenderStepped:Connect(function(dt)
-	ringOutPulseTime += dt
 	local renderTime = workspace:GetServerTimeNow() - RENDER_DELAY
 
 	local snap0, snap1 = nil, nil
@@ -164,7 +183,6 @@ RunService.RenderStepped:Connect(function(dt)
 			break
 		end
 	end
-
 	if not snap0 then return end
 
 	local alpha = 0
@@ -177,56 +195,51 @@ RunService.RenderStepped:Connect(function(dt)
 		local vis = ensureVisuals(pid)
 		local model = getBeyModel(pid)
 
-		-- Hitstop freeze
 		if vis.hitstop > 0 then
 			vis.hitstop -= dt
 			continue
 		end
 
-		-- Spin accumulation
 		local angMag = bState0.angularVelocity.Magnitude
 		vis.rotation += angMag * dt
-
 		updateSpinDownAudio(pid, angMag)
 
-		if model then
-			-- Position
-			local pos = bState0.position
-			if snap1 then
-				local bState1 = snap1.beyStates[pid]
-				if bState1 then
-					pos = bState0.position:Lerp(bState1.position, alpha)
-				end
-			end
+		if not model then continue end
+		if model:GetAttribute("Shattering") then continue end -- break animation owns it now
 
-			-- Tilt amplified 1.5x for readability — makes wobble unmistakable
-			local tiltAngle = math.rad(bState0.tilt * 1.5)
-			model:PivotTo(CFrame.new(pos) * CFrame.Angles(tiltAngle, vis.rotation, 0))
-
-			-- ── Command glow ──────────────────────────────────────────────
-			local glow = ensureCommandGlow(pid, model)
-			if glow then
-				local cmd = bState0.currentCommand
-				if cmd and COMMAND_GLOW[cmd] then
-					glow.Color = COMMAND_GLOW[cmd].color
-					glow.Brightness = COMMAND_GLOW[cmd].brightness
-				else
-					glow.Brightness = 0
-				end
-			end
-
-			-- ── Ring-out danger pulse ─────────────────────────────────────
-			local ringBox = ensureRingOutBox(pid, model)
-			if ringBox then
-				if bState0.zoneState == "RingOut" then
-					ringBox.Visible = true
-					-- 5 Hz pulse: transparency oscillates 0.6–0.9
-					local pulse = 0.75 + 0.15 * math.sin(ringOutPulseTime * math.pi * 10)
-					ringBox.SurfaceTransparency = pulse
-				else
-					ringBox.Visible = false
-				end
+		-- Position (lerp), rendered so the Bey sits on the flat floor (top at y=0).
+		local pos = bState0.position
+		local targetFacing = bState0.facingAngle or 0
+		if snap1 then
+			local bState1 = snap1.beyStates[pid]
+			if bState1 then
+				pos = bState0.position:Lerp(bState1.position, alpha)
+				targetFacing = lerpAngle(bState0.facingAngle or 0, bState1.facingAngle or 0, alpha)
 			end
 		end
+		local renderPos = Vector3.new(pos.X, math.max(0, pos.Y - Constants.BeyRadius), pos.Z)
+
+		-- Smooth the displayed facing.
+		if not vis.facingInit then
+			vis.facing = targetFacing
+			vis.facingInit = true
+		else
+			vis.facing = lerpAngle(vis.facing, targetFacing, math.clamp(dt * 12, 0, 1))
+		end
+
+		-- Tilt amplified 1.5× for readability.
+		local tiltAngle = math.rad((bState0.tilt or 0) * 1.5)
+		model:PivotTo(CFrame.new(renderPos) * CFrame.Angles(tiltAngle, vis.rotation, 0))
+
+		-- Facing arrow: positioned/oriented AFTER PivotTo so it doesn't spin.
+		local arrow = ensureFacingArrow(pid, model)
+		if arrow then
+			local fdir = Vector3.new(math.cos(vis.facing), 0, math.sin(vis.facing))
+			local arrowCenter = renderPos + Vector3.new(0, Constants.BeyRadius + 1.6, 0) + fdir * (Constants.BeyRadius + 0.6)
+			arrow.CFrame = CFrame.lookAt(arrowCenter, arrowCenter + fdir)
+		end
+
+		-- Ability glow.
+		applyAbilityGlow(ensureAbilityGlow(pid, model), bState0.isDashing, bState0.isRevolving)
 	end
 end)

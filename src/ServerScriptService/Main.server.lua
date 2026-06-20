@@ -15,16 +15,28 @@ require(script.Parent:WaitForChild("DebugStatePublisher"))
 
 local SimulationHarness = require(script.Parent:WaitForChild("SimulationHarness"))
 
--- Expose to Studio command bar for on-demand harness runs (_G.RunSimulation(100))
+-- Expose to Studio command bar for on-demand harness runs.
 _G.RunSimulation = function(count)
     task.spawn(function()
         SimulationHarness.RunBatch(count)
     end)
 end
 
+_G.RunValidationSuite = function(count)
+    task.spawn(function()
+        SimulationHarness.RunValidationSuite(count)
+    end)
+end
+
+_G.RunStadiumGate = function(stadiumId)
+    task.spawn(function()
+        SimulationHarness.RunStadiumGate(stadiumId or "Classic")
+    end)
+end
+
 local Remotes = require(game:GetService("ReplicatedStorage"):WaitForChild("Remotes"))
 local LaunchValidator = require(script.Parent:WaitForChild("LaunchValidator"))
-local CommandValidator = require(script.Parent:WaitForChild("CommandValidator"))
+local InputValidator = require(script.Parent:WaitForChild("InputValidator"))
 
 local waitingPlayers = {}
 local matchInProgress = false
@@ -106,7 +118,7 @@ Remotes.RequestLaunch.OnServerEvent:Connect(function(player, sequenceId, launchD
     LaunchValidator.ValidateAndQueue(player, sequenceId, launchData)
 end)
 
--- Handle battle command requests from clients
-Remotes.RequestCommand.OnServerEvent:Connect(function(player, sequenceId, command)
-    CommandValidator.ValidateAndQueue(player, sequenceId, command)
+-- Handle continuous analog input (joystick facing + Dash/Revolve held-state)
+Remotes.InputUpdate.OnServerEvent:Connect(function(player, packet)
+    InputValidator.HandleInput(player, packet)
 end)

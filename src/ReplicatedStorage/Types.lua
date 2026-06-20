@@ -10,6 +10,8 @@ export type ReplayEvent = {
     eventData: any,
 }
 
+export type Mods = { Attack: number, Defense: number, Stamina: number, Agility: number }
+
 export type BeyState = {
     playerId: number,
     position: Vector3,
@@ -23,6 +25,20 @@ export type BeyState = {
     criticalSpinTimer: number,
     collisionFlags: { [string]: boolean },
     zoneState: string,
+    -- HP / Mana
+    hp: number,
+    maxHp: number,
+    mana: number,
+    maxMana: number,
+    -- Facing & abilities
+    facingAngle: number,
+    targetFacing: number,
+    isDashing: boolean,
+    isRevolving: boolean,
+    -- Craft profile
+    loadout: { blade: string, disc: string, core: string, tip: string },
+    mods: Mods,
+    finishReason: string?,
 }
 
 export type CollisionEventPayload = {

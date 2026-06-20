@@ -47,9 +47,12 @@ end
 local Remotes = {
 	-- Client to Server
 	RequestLaunch   = getOrCreateRemote("RequestLaunch"),
-	RequestCommand  = getOrCreateRemote("RequestCommand"),
+	-- Continuous analog input, sent ~15 Hz: { facingAngle: number, dash: boolean, revolve: boolean }
+	InputUpdate     = getOrCreateRemote("InputUpdate"),
 
 	-- Server to Client
+	-- (The HP-break "shatter" trigger rides the StateSnapshot event stream as an
+	--  "HpBreak" event — no dedicated remote needed.)
 	MatchStateChanged   = getOrCreateRemote("MatchStateChanged"),
 	StateSnapshot       = getOrCreateRemote("StateSnapshot"),
 	CollisionEvent      = getOrCreateRemote("CollisionEvent"),

@@ -67,8 +67,11 @@ function ReplayRecorder.OnReplicationPhase(matchState)
 			tilt           = state.tilt,
 			stability      = state.stability,
 			zoneState      = state.zoneState,
-			currentCommand = state.currentCommand,
-			ringOutTimer   = state.ringOutTimer,
+			hp             = state.hp,
+			mana           = state.mana,
+			facingAngle    = state.facingAngle,
+			isDashing      = state.isDashing,
+			isRevolving    = state.isRevolving,
 			finishReason   = state.finishReason,
 		}
 	end

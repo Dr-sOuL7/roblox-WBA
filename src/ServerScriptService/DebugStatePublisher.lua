@@ -32,8 +32,15 @@ function DebugStatePublisher.OnReplicationPhase(matchState)
             tilt = bState.tilt,
             stability = bState.stability,
             zoneState = bState.zoneState,
-            currentCommand = bState.currentCommand,
-            commandCooldownTimer = bState.commandCooldownTimer,
+            -- HP / Mana / control state for the new HUD and renderer
+            hp = bState.hp,
+            maxHp = bState.maxHp,
+            mana = bState.mana,
+            maxMana = bState.maxMana,
+            facingAngle = bState.facingAngle,
+            isDashing = bState.isDashing,
+            isRevolving = bState.isRevolving,
+            finishReason = bState.finishReason,
         }
     end
     

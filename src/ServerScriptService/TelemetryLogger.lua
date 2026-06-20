@@ -1,7 +1,8 @@
 --[=[
 	TelemetryLogger.lua
 	Collects per-match metrics and prints structured match summaries.
-	Tracks collision counts, timestamps, stability, recovery events, and emotional tags.
+	Tracks collisions, wall bounces, ability usage, HP/Mana economy, finishes
+	and emotional tags.
 ]=]
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
@@ -15,10 +16,10 @@ local telemetry = {
 	heavyTimestamps  = {},
 	smashTimestamps  = {},
 	recoveryEvents   = 0,
-	ringOutWarnings  = 0,
-	ringOutEscapes   = 0,
-	ringOutFinishes  = 0,
-	commandCounts    = {}, -- { [pid] = { Attack=0, Defend=0, Evade=0 } }
+	wallBounces      = 0,
+	hpBreaks         = 0,
+	spinOuts         = 0,
+	abilityTicks     = {}, -- { [pid] = { dash=0, revolve=0, samples=0 } }
 	tiltAccumulators = {}, -- { [pid] = { sum=0, samples=0 } }
 	matchStartTick   = 0,
 	hasLoggedFinish  = false,
@@ -29,10 +30,10 @@ local function resetTelemetry()
 	telemetry.heavyTimestamps = {}
 	telemetry.smashTimestamps = {}
 	telemetry.recoveryEvents  = 0
-	telemetry.ringOutWarnings = 0
-	telemetry.ringOutEscapes  = 0
-	telemetry.ringOutFinishes = 0
-	telemetry.commandCounts   = {}
+	telemetry.wallBounces     = 0
+	telemetry.hpBreaks        = 0
+	telemetry.spinOuts        = 0
+	telemetry.abilityTicks    = {}
 	telemetry.tiltAccumulators = {}
 	telemetry.matchStartTick  = 0
 	telemetry.hasLoggedFinish = false
@@ -41,39 +42,34 @@ end
 local function generateEmotionalTag(matchState)
 	local tags = {}
 
-	-- Close Finish: both/all beys below 25% stability at end
-	local lowStabilityCount = 0
+	local lowHpCount = 0
 	local totalBeys = #matchState.playerOrder
 	for _, pid in ipairs(matchState.playerOrder) do
 		local bState = matchState.beyStates[pid]
-		if bState.stability < Constants.BaseStability * 0.25 then
-			lowStabilityCount += 1
+		if bState.hp < bState.maxHp * 0.25 then
+			lowHpCount += 1
 		end
 	end
-	if lowStabilityCount >= totalBeys and totalBeys > 1 then
+	if lowHpCount >= totalBeys and totalBeys > 1 then
 		table.insert(tags, "CloseFinish")
 	end
 
-	-- Dominant: winner has >60% stability remaining
 	if matchState.currentWinner and matchState.currentWinner ~= "Draw" then
 		local winnerState = matchState.beyStates[matchState.currentWinner]
-		if winnerState and winnerState.stability > Constants.BaseStability * 0.6 then
+		if winnerState and winnerState.hp > winnerState.maxHp * 0.6 then
 			table.insert(tags, "Dominant")
 		end
 	end
 
-	-- Slugfest: high collision count
 	local totalCollisions = telemetry.collisionCounts.Light + telemetry.collisionCounts.Heavy + telemetry.collisionCounts.Smash
 	if totalCollisions > 20 then
 		table.insert(tags, "Slugfest")
 	end
 
-	-- Comeback: at least one recovery event
 	if telemetry.recoveryEvents > 0 then
 		table.insert(tags, "Comeback")
 	end
 
-	-- Draw
 	if matchState.currentWinner == "Draw" then
 		table.insert(tags, "Draw")
 	end
@@ -86,14 +82,12 @@ local function generateEmotionalTag(matchState)
 end
 
 function TelemetryLogger.OnReplicationPhase(matchState)
-	-- Track start tick
 	if telemetry.matchStartTick == 0 and matchState.phase == "Active" then
 		telemetry.matchStartTick = matchState.tickNumber
 	end
 
-	-- Accumulate per-tick data during active play
 	if matchState.phase == "Active" then
-		-- Tilt tracking
+		-- Per-tick sampling: tilt + ability usage
 		for _, pid in ipairs(matchState.playerOrder) do
 			local bState = matchState.beyStates[pid]
 			if not telemetry.tiltAccumulators[pid] then
@@ -101,9 +95,16 @@ function TelemetryLogger.OnReplicationPhase(matchState)
 			end
 			telemetry.tiltAccumulators[pid].sum += bState.tilt
 			telemetry.tiltAccumulators[pid].samples += 1
+
+			if not telemetry.abilityTicks[pid] then
+				telemetry.abilityTicks[pid] = { dash = 0, revolve = 0, samples = 0 }
+			end
+			local a = telemetry.abilityTicks[pid]
+			a.samples += 1
+			if bState.isDashing then a.dash += 1 end
+			if bState.isRevolving then a.revolve += 1 end
 		end
 
-		-- Event tracking
 		for _, ev in ipairs(matchState.tickEvents) do
 			if ev.eventType == "Collision" then
 				local class = ev.eventData.collisionClass
@@ -117,28 +118,18 @@ function TelemetryLogger.OnReplicationPhase(matchState)
 				end
 			elseif ev.eventType == "Recovery" then
 				telemetry.recoveryEvents += 1
-			elseif ev.eventType == "CommandIssued" then
-				local pid = ev.eventData.playerId
-				local cmd = ev.eventData.command
-				if not telemetry.commandCounts[pid] then
-					telemetry.commandCounts[pid] = { Attack = 0, Defend = 0, Evade = 0 }
-				end
-				if telemetry.commandCounts[pid][cmd] then
-					telemetry.commandCounts[pid][cmd] += 1
-				end
-			elseif ev.eventType == "RingOutWarning" then
-				telemetry.ringOutWarnings += 1
-			elseif ev.eventType == "RingOutEscaped" then
-				telemetry.ringOutEscapes += 1
+			elseif ev.eventType == "WallBounce" then
+				telemetry.wallBounces += 1
 			elseif ev.eventType == "BeyFinished" then
-				if ev.eventData.reason == "RingOut" then
-					telemetry.ringOutFinishes += 1
+				if ev.eventData.reason == "HpBreak" then
+					telemetry.hpBreaks += 1
+				elseif ev.eventData.reason == "SpinOut" then
+					telemetry.spinOuts += 1
 				end
 			end
 		end
 	end
 
-	-- Print structured summary at match end
 	if matchState.phase == "Finished" and not telemetry.hasLoggedFinish then
 		telemetry.hasLoggedFinish = true
 
@@ -146,7 +137,6 @@ function TelemetryLogger.OnReplicationPhase(matchState)
 		local matchTicks = matchState.tickNumber - telemetry.matchStartTick
 		local matchDuration = matchTicks * tickDuration
 
-		-- Determine finish type
 		local finishType = "Unknown"
 		for _, ev in ipairs(matchState.tickEvents) do
 			if ev.eventType == "BeyFinished" then
@@ -157,7 +147,6 @@ function TelemetryLogger.OnReplicationPhase(matchState)
 			finishType = "Draw"
 		end
 
-		-- Average tilts (in playerOrder for deterministic print order)
 		local tiltSummary = {}
 		for _, pid in ipairs(matchState.playerOrder) do
 			local acc = telemetry.tiltAccumulators[pid]
@@ -167,10 +156,8 @@ function TelemetryLogger.OnReplicationPhase(matchState)
 			end
 		end
 
-		-- Emotional tag
 		local emotionalTag = generateEmotionalTag(matchState)
 
-		-- Print structured report
 		print("═══════════════════════════════════════════")
 		print("        MATCH TELEMETRY SUMMARY")
 		print("═══════════════════════════════════════════")
@@ -183,15 +170,14 @@ function TelemetryLogger.OnReplicationPhase(matchState)
 			telemetry.collisionCounts.Light,
 			telemetry.collisionCounts.Heavy,
 			telemetry.collisionCounts.Smash))
-		if #telemetry.heavyTimestamps > 0 then
-			local ts = {}
-			for _, t in ipairs(telemetry.heavyTimestamps) do table.insert(ts, string.format("%.1f", t)) end
-			print(" Heavy @:      " .. table.concat(ts, ", "))
-		end
-		if #telemetry.smashTimestamps > 0 then
-			local ts = {}
-			for _, t in ipairs(telemetry.smashTimestamps) do table.insert(ts, string.format("%.1f", t)) end
-			print(" Smash @:      " .. table.concat(ts, ", "))
+		print(string.format(" Wall Bounces: %d", telemetry.wallBounces))
+		print("───────────────────────────────────────────")
+		print(" Final HP / Mana:")
+		for _, pid in ipairs(matchState.playerOrder) do
+			local b = matchState.beyStates[pid]
+			print(string.format("  Player %d:  HP=%.0f/%d  Mana=%.0f  [%s/%s/%s/%s]",
+				pid, b.hp, b.maxHp, b.mana,
+				b.loadout.blade, b.loadout.disc, b.loadout.core, b.loadout.tip))
 		end
 		print("───────────────────────────────────────────")
 		print(" Avg Tilt:")
@@ -199,27 +185,20 @@ function TelemetryLogger.OnReplicationPhase(matchState)
 			print(line)
 		end
 		print(string.format(" Recoveries:   %d", telemetry.recoveryEvents))
-		print("───────────────────────────────────────────")
-		print(string.format(" Ring-Outs:    Warnings=%d  Escapes=%d  Finishes=%d",
-			telemetry.ringOutWarnings,
-			telemetry.ringOutEscapes,
-			telemetry.ringOutFinishes))
-		-- Command distribution
-		if next(telemetry.commandCounts) then
-			print(" Commands:")
-			for _, pid in ipairs(matchState.playerOrder) do
-				local cc = telemetry.commandCounts[pid]
-				if cc then
-					print(string.format("  Player %d:  Attack=%d  Defend=%d  Evade=%d",
-						pid, cc.Attack, cc.Defend, cc.Evade))
-				end
+		-- Ability usage (% of active ticks holding each ability)
+		print(" Ability Usage:")
+		for _, pid in ipairs(matchState.playerOrder) do
+			local a = telemetry.abilityTicks[pid]
+			if a and a.samples > 0 then
+				print(string.format("  Player %d:  Dash=%.0f%%  Revolve=%.0f%%",
+					pid, (a.dash / a.samples) * 100, (a.revolve / a.samples) * 100))
 			end
 		end
 		print("───────────────────────────────────────────")
+		print(string.format(" Finishes:     HpBreak=%d  SpinOut=%d", telemetry.hpBreaks, telemetry.spinOuts))
 		print(string.format(" Emotional:    [%s]", emotionalTag))
 		print("═══════════════════════════════════════════")
 
-		-- Reset for next match
 		resetTelemetry()
 	end
 end

@@ -116,47 +116,52 @@ local function spawnStadium()
 	if stadiumSpawned then return end
 	stadiumSpawned = true
 
-	local R = Constants.BowlSphereRadius
-	local MAX_R = Constants.BowlPlayableRadius
+	local R = Constants.StadiumRadius
+	local wallHeight = Constants.StadiumWallHeight
 
-	-- ── Create a massive block to carve the bowl into ──────────
-	local block = Instance.new("Part")
-	block.Name = "StadiumFloor"
-	block.Size = Vector3.new(MAX_R * 2 + 6, 12, MAX_R * 2 + 6)
-	-- Center it so the top surface rests at Y = 11, and bottom at Y = -1
-	block.CFrame = CFrame.new(0, 5, 0) 
+	-- ── Flat circular floor (top surface at Y = 0) ──────────
+	local floor = Instance.new("Part")
+	floor.Name = "StadiumFloor"
+	floor.Shape = Enum.PartType.Cylinder
+	-- Cylinder: X = height/thickness, Y & Z = diameter. Rotate 90° about Z to lay flat.
+	floor.Size = Vector3.new(1, R * 2, R * 2)
+	floor.CFrame = CFrame.new(0, -0.5, 0) * CFrame.Angles(0, 0, math.rad(90))
+	floor.Anchored = true
+	floor.CanCollide = true
+	floor.Material = Enum.Material.SmoothPlastic
+	floor.Color = Color3.fromRGB(40, 40, 50)
+	floor.Parent = workspace
 
-	-- ── Create a sphere to subtract from the block ──────────
-	local sphere = Instance.new("Part")
-	sphere.Shape = Enum.PartType.Ball
-	sphere.Size = Vector3.new(R * 2, R * 2, R * 2)
-	-- Center the sphere exactly R studs above 0, so the lowest tip touches Y=0
-	sphere.CFrame = CFrame.new(0, R, 0)
+	-- ── Open-top wall: a ring of thin segments (physics handled in our own math,
+	--    so these are visual only — CanCollide = false) ──────────
+	local wallFolder = Instance.new("Folder")
+	wallFolder.Name = "StadiumWalls"
+	wallFolder.Parent = workspace
 
-	-- Generate the smooth curvy bowl using CSG Solid Modeling
-	local success, curvyBowl = pcall(function()
-		return block:SubtractAsync({sphere}, Enum.CollisionFidelity.Default, Enum.RenderFidelity.Precise)
-	end)
-
-	if success and curvyBowl then
-		curvyBowl.Name = "StadiumFloor"
-		curvyBowl.Anchored = true
-		curvyBowl.CanCollide = true
-		curvyBowl.Material = Enum.Material.SmoothPlastic
-		curvyBowl.Color = Color3.fromRGB(245, 245, 250)
-		curvyBowl.CFrame = block.CFrame
-		curvyBowl.Parent = workspace
-	else
-		warn("[MatchManager] Failed to generate perfectly curvy stadium! CSG Error.")
-		stadiumSpawned = false
-		return
+	local segments = 48
+	local segWidth = (2 * math.pi * R / segments) * 1.06 -- slight overlap, no gaps
+	for i = 1, segments do
+		local angle = (i / segments) * math.pi * 2
+		local pos = Vector3.new(math.cos(angle) * R, wallHeight / 2, math.sin(angle) * R)
+		local seg = Instance.new("Part")
+		seg.Name = "WallSeg"
+		-- X = tangential width, Y = height, Z = radial thickness (lookAt makes Z radial)
+		seg.Size = Vector3.new(segWidth, wallHeight, 0.5)
+		seg.CFrame = CFrame.lookAt(pos, Vector3.new(0, wallHeight / 2, 0))
+		seg.Anchored = true
+		seg.CanCollide = false
+		seg.CastShadow = false
+		seg.Material = Enum.Material.ForceField
+		seg.Color = Color3.fromRGB(100, 150, 255)
+		seg.Transparency = 0.25
+		seg.Parent = wallFolder
 	end
 
-	-- ── Center nub (classic Beyblade stadium center marker) ──────────
+	-- ── Center marker ──────────
 	local centerMark = Instance.new("Part")
 	centerMark.Name = "StadiumCenter"
 	centerMark.Size = Vector3.new(0.5, 0.2, 0.5)
-	centerMark.CFrame = CFrame.new(0, 0, 0)
+	centerMark.CFrame = CFrame.new(0, 0, 0) * CFrame.Angles(0, 0, math.rad(90))
 	centerMark.Shape = Enum.PartType.Cylinder
 	centerMark.Anchored = true
 	centerMark.CanCollide = false
@@ -190,12 +195,21 @@ function MatchManager.StartNewMatch(playerIds)
 	-- Spawn Beys
 	spawnStadium()
 
+	local spawnX = Constants.StadiumRadius * 0.45
 	for i, pid in ipairs(playerIds) do
-		local bState = MatchState.createBeyState(pid)
-		-- Launch the Beys from high above the stadium (Y=10)
-		bState.position = Vector3.new((i == 1) and -10 or 10, 10, 0)
-		bState.velocity = Vector3.new(0, 0, (i == 1) and 60 or -60)
+		-- TODO: pull each player's crafted loadout from persistence; default for now.
+		local bState = MatchState.createBeyState(pid, nil)
+		-- Flat spawn on opposite sides, resting on the floor, spun up and facing the centre.
+		local sx = (i == 1) and -spawnX or spawnX
+		bState.position = Vector3.new(sx, Constants.BeyRadius, 0)
 		bState.previousPosition = bState.position
+		bState.angularVelocity = Vector3.new(0, Constants.LaunchBaseSpin * bState.mods.Stamina, 0)
+		-- Face the centre (opponent): +X spawn faces -X (π), -X spawn faces +X (0).
+		bState.facingAngle = (sx < 0) and 0 or math.pi
+		bState.targetFacing = bState.facingAngle
+		-- Launched into the arena with forward momentum toward the centre.
+		local dir = Vector3.new(math.cos(bState.facingAngle), 0, math.sin(bState.facingAngle))
+		bState.velocity = dir * Constants.LaunchImpulseSpeed
 		newState.beyStates[pid] = bState
 
 		createPrototypeBeyModel(pid, i == 1)
@@ -219,7 +233,7 @@ function MatchManager.CleanupMatch()
 	for _, part in ipairs(workspace:GetChildren()) do
 		local n = part.Name
 		if string.sub(n, 1, 4) == "Bey_"
-			or n == "StadiumFloor" or n == "StadiumWall"
+			or n == "StadiumFloor" or n == "StadiumWalls"
 			or n == "StadiumCenter" then
 			part:Destroy()
 		end
