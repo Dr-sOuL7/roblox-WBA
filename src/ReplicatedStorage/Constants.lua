@@ -4,20 +4,15 @@ local Constants = {
 	ReplicationTickRate = 15,   -- Hz snapshot broadcast (every 2nd sim tick)
 	MaxCatchupTicks = 5,
 
-	-- ── Launch ────────────────────────────────────────────────────────────────
+	-- ── Launch ceremony ────────────────────────────────────────────────────────
+	-- Setup (aim) → both READY → 3·2·1·GO → the Bey is fired into the flat arena
+	-- with spin + forward momentum. Grading scales spin/impulse, bounded by the cap.
 	LaunchBonusCap = 0.15,      -- ±15% cap on launch quality advantage
-
-	-- Base launch values. The timing-bar quality bonus scales BOTH speed and
-	-- spin, bounded by LaunchBonusCap. Client aims at the bowl centre from its
-	-- own spawn; same numbers feed the harness so headless matches model
-	-- exactly what live testers play.
 	PrototypeLaunchSpeed = 21,
 	PrototypeLaunchSpin = 100,
+	LaunchBaseSpin = 90,        -- baseline angular velocity (RPM proxy) granted on GO
+	LaunchImpulseSpeed = 24,    -- initial forward velocity (studs/s) toward the centre
 
-	-- Launch ceremony (director's design): Setup (aim sliders) → both READY →
-	-- 3·2·1·GO–SHOOT! → click LAUNCH at the GO instant. Grading = |click − GO|
-	-- on the SYNCED server clock; client preview and server verdict share
-	-- LaunchQuality.lua so they cannot disagree.
 	LaunchPerfectWindow = 0.12,      -- s from GO → Perfect
 	LaunchGoodWindow = 0.30,         -- s from GO → Good; beyond → Poor
 	LaunchBonusPerfect = 0.15,       -- == LaunchBonusCap; the ceiling
@@ -27,10 +22,7 @@ local Constants = {
 	SetupTimeoutSeconds = 30,        -- auto-ready: AFK can't hold the match hostage
 	AutoLaunchDelay = 2,             -- s after GO; missed clicks launch at Poor
 
-	-- Aim slider ranges (spherical): height = release height; theta = elevation
-	-- from vertical (90 = flat, lower = steeper plunge with less carry);
-	-- phi = azimuth (0 = +X). Client sends ONLY these numbers — the server
-	-- clamps them and builds the velocity vector itself.
+	-- Aim slider ranges (the flat-arena launch keeps the azimuth as the aim).
 	LaunchHeightMin = 6,
 	LaunchHeightMax = 18,
 	LaunchHeightDefault = 10,
@@ -38,100 +30,95 @@ local Constants = {
 	LaunchThetaMax = 90,
 
 	-- ── Multi-match server (ADR-001) ──────────────────────────────────────────
-	-- One server simulates several concurrent matches. Each match gets an
-	-- arena slot; physics runs in local bowl-space and rendering offsets by
-	-- the slot's world origin, so simulation math is identical in every slot.
+	-- One server simulates several concurrent matches. Each match gets an arena
+	-- slot; physics runs in local arena-space and rendering offsets by the slot's
+	-- world origin, so simulation math is identical in every slot.
 	MaxConcurrentMatches = 4,
 	ArenaSlotSpacing = 200,     -- studs between stadium origins on X
-	-- A dropped player keeps their seat this long; returning resumes the
-	-- match, expiry forfeits it (opponent wins through normal evaluation).
-	ReconnectGraceSeconds = 20,
+	ReconnectGraceSeconds = 20, -- a dropped player keeps their seat this long
 
-	-- ── Arena geometry (single source of truth) ───────────────────────────────
-	-- R=50 sphere subtracted from a block gives the curvy bowl floor.
-	-- MAX_R=20 is the XZ playable radius before ring-out triggers.
-	-- BeyRadius is the collision radius used for overlap detection.
-	BowlSphereRadius = 50,
-	BowlPlayableRadius = 20,
-	BowlRimBuffer = 0.8,        -- BeyRadius multiplier; softens rim edge
-	BeyRadius = 2,
+	-- ── Arena geometry (flat, walled stadium — single source of truth) ─────────
+	-- No bowl, no ring-out: a flat circular floor ringed by a wall. The Bey
+	-- bounces off the wall (restitution), takes a small impact-scaled nick + tilt,
+	-- and charges Mana. StadiumRadius is the default; each stadium may override it.
+	BeyRadius            = 2,     -- collision radius used for overlap detection
+	StadiumRadius        = 22,    -- flat circle radius (studs); wall sits here
+	StadiumWallHeight    = 8,     -- visual wall height (studs)
+	StadiumWallBounce    = 0.65,  -- restitution coefficient for wall bounce
+	StadiumFloorFriction = 0.993, -- per-tick velocity decay on the flat floor
+
+	-- Wall impact: a gentle touch barely matters, a full-speed dash into the wall
+	-- stings. Scaled by inbound normal speed against WallImpactRefSpeed.
+	WallImpactRefSpeed  = 42,     -- normal speed that yields the full base values
+	WallHpDamageBase    = 1.6,    -- HP nick at reference inbound speed
+	WallTiltBase        = 2.2,    -- degrees of wobble added at reference speed
+	WallStabilityBase   = 0.6,    -- structural balance eroded at reference speed
+	WallImpactMaxScale  = 1.6,    -- clamp on the speed scale (a wall can't one-shot)
 
 	-- ── Collision ─────────────────────────────────────────────────────────────
-	CollisionCooldownTicks = 2,
+	CollisionCooldownTicks = 5,
 	TangentialEnergyRetention = 0.75,
 	CollisionPushMultiplier = 0.8,
 	CollisionPushMin = 10,
-	-- Knockback cap — THE ring-out regulator. Bowl escape speed from centre is
-	-- ~22 studs/s (rim height 3.5 → sqrt(2·g·h) ≈ 19, plus grace-window slack).
-	-- Uncapped push (impact 140 × 0.8 = 112) ejected BOTH beys on the first
-	-- smash: 85% mutual-ring-out draws at 0.6 s in the harness. 21 sits just
-	-- UNDER escape: plain hits stay contained, while an Attacker's recoil
-	-- (× CommandRecoilMultiplier 1.2 = 25.2) crosses it — ring-out risk
-	-- attaches to aggression and rim adjacency, per the design. Harness-tuned:
-	-- 20 → 6% ring-outs, 24 → 92%; 21 lands the 10–30% band.
-	CollisionPushMax = 21,
+	CollisionPushMax = 60,       -- safety cap on knockback (no ring-out to regulate)
 	CollisionSubSteps = 3,       -- Physics+Collision loop iterations per tick
 
-	-- Damage variance: was 0.5–1.5 (3× swing). Now ±12.5% — skill over RNG.
+	-- Damage variance: ±12.5% — skill over RNG.
 	CollisionDamageVarianceMin = 0.875,
 	CollisionDamageVarianceMax = 1.125,
 
-	-- ── Physics forces ────────────────────────────────────────────────────────
-	-- FrictionDecay and AngularDecay are expressed per-tick at 30 Hz.
-	-- Derivation: old 10 Hz value^(10/30) preserves identical decay-per-second.
-	--   FrictionDecay:  0.98^(10/30) = 0.9932
-	--   AngularDecay:   0.99^(10/30) = 0.9966
-	Gravity = 50,
-	FrictionDecay = 0.9932,
-	BowlForce = 7,
+	-- ── Physics decay ─────────────────────────────────────────────────────────
+	-- AngularDecay per-tick at 30 Hz. ~0.9985 ⇒ natural spin lasts ~65 s at 1×
+	-- Stamina — room for HP battles, while a low-Stamina build still feels the clock.
+	AngularDecay = 0.9985,
 	VelocityClampMax = 200,
 	PostCollisionVelocityClamp = 150,
 
-	-- ── Angular & Wobble ──────────────────────────────────────────────────────
-	AngularDecay = 0.9966,
-	WobbleAmplification = 28,
-	WobbleTiltRecoveryRate = 8,
-	WobbleCollapseThreshold = 70,
+	-- ── Wobble / destabilization ──────────────────────────────────────────────
+	WobbleAmplification = 15,
+	WobbleTiltRecoveryRate = 9,
+	TiltCollapseThreshold = 110, -- tilt above this collapses into a SpinOut topple
 
 	-- ── Spin & Stability ──────────────────────────────────────────────────────
 	MinEffectiveSpinThreshold = 5,
-	-- Damaged Beys spin down faster: at stability 0 the angular decay exponent
-	-- grows by this fraction (linear from 1.0 at full stability). Deterministic
-	-- skill-linked separation — the Bey that took more hits dies first — which
-	-- collapsed the structural double-SpinOut draw rate in mirror matches.
-	StabilitySpinDrainMax = 0.12,
 	CriticalSpinWindow = 0.35,
 	BaseStability = 100,
-	StabilityDamageLight = 3,
-	StabilityDamageHeavy = 15,
-	StabilityDamageSmash = 30,
-	SpinDamageMultiplierHeavy = 0.93,
-	SpinDamageMultiplierSmash = 0.8,
+	StabilityDamageLight = 0.4,
+	StabilityDamageHeavy = 1.3,
+	StabilityDamageSmash = 2.8,
 
-	-- ── Ring-out ──────────────────────────────────────────────────────────────
-	-- 15 ticks = 0.5 s at 30 Hz. The original 10 (~0.33 s) was flagged as too
-	-- short to react at 200 ms latency, and harness showed glancing rim
-	-- excursions converting to deaths: Defend's centre pull needs the extra
-	-- window to function as a save. Live dial — tune from playtests.
-	RingOutGraceTicks = 15,
+	-- ── Collision severity thresholds (impact speed) ──────────────────────────
+	SmashSpeedThreshold = 50,
+	HeavySpeedThreshold = 20,
 
-	-- ── Battle commands ───────────────────────────────────────────────────────
-	CommandDurationTicks = 15,          -- 0.5 s at 30 Hz
-	CommandCooldownTicks = 30,          -- 1.0 s at 30 Hz; 33% uptime prevents spam
-	-- Steering forces are sized against the ~22 studs/s bowl-escape speed:
-	-- one full command adds force × 0.5 s of velocity. The old values
-	-- (35/30, tuned for uncapped physics) added ~17 studs/s per press and
-	-- turned commands into self-ring-out buttons — harness showed 96.5%
-	-- ring-out finishes at 6.5 s average. Current values steer, not eject.
-	CommandAttackForce = 20,
-	CommandDefendForce = 15,            -- supplements BowlForce; centre-pull is safe
-	CommandEvadeForce = 17,
-	-- Evade dodge direction blend (normalized): mostly tangential sidestep,
-	-- some radial separation. See PhysicsController's matador-dodge comment.
-	EvadeRadialWeight = 0.35,
-	EvadeTangentialWeight = 0.65,
-	CommandStabilityRecoveryBonus = 0.15,  -- Defend: +15% tilt recovery rate
-	CommandRecoilMultiplier = 1.2,         -- Attack recoil: 21 × 1.2 = 25.2 > bowl escape — see CollisionPushMax
+	-- ══ HP system ═════════════════════════════════════════════════════════════
+	BeyMaxHp          = 160,    -- baseline; scaled by the Stamina stat
+	HpDamageLight     = 1.9,    -- baseline HP per Light collision (before stats/zone)
+	HpDamageHeavy     = 4.3,    -- baseline HP per Heavy collision
+	HpDamageSmash     = 8.6,    -- baseline HP per Smash collision
+	HpDamageMaxFrac   = 0.12,   -- a single hit can never remove more than this fraction of max HP
+
+	-- ══ Mana system ═══════════════════════════════════════════════════════════
+	BeyMaxMana             = 100,
+	StartingMana           = 25,    -- small opening reserve so the first move is possible
+	ManaGainPerHit         = 8,     -- flat mana gained per Bey-vs-Bey collision (main charge)
+	ManaGainWall           = 1,     -- mana from a wall bounce (small — walls aren't a free refuel)
+	ManaRegenPerTick       = 0.8,   -- passive trickle while coasting (no ability held)
+	ManaCostDashPerTick    = 2.6,   -- mana drained while Dash held (per sim tick)
+	ManaCostRevolvePerTick = 1.4,   -- mana drained while Revolve held (per sim tick)
+
+	-- ══ Dash ══════════════════════════════════════════════════════════════════
+	DashBaseSpeed       = 21,    -- base speed reference (avoids 3× near-zero)
+	DashSpeedMultiplier = 3.0,   -- dash drives the Bey to 3× base speed in facing dir
+
+	-- ══ Revolve ═══════════════════════════════════════════════════════════════
+	RevolveOrbitRadius   = 18,   -- studs from centre (near the wall edge)
+	RevolveOrbitSpeed    = 19,   -- tangential orbit speed (studs/s)
+	RevolveRadialPull    = 6,    -- how hard centripetal force snaps toward orbit radius
+	RevolveComboMultiplier = 3.0, -- Dash+Revolve held together → revolve at 3× speed
+
+	-- ══ Facing / Steering ═════════════════════════════════════════════════════
+	FacingTurnSpeed = math.pi * 4, -- rad/s max turn rate (~2 full turns/s) at 1× Agility
 
 	-- ── Hitstop ───────────────────────────────────────────────────────────────
 	HitstopHeavy = 0.04,
@@ -139,17 +126,8 @@ local Constants = {
 	HitstopDurationRange = { Min = 0.03, Max = 0.06 },
 
 	-- ── Interpolation ─────────────────────────────────────────────────────────
-	-- 150 ms = 2.25 snapshots at 15 Hz — comfortable jitter headroom
 	InterpolationDelay = 0.15,
 	SnapshotBufferMax = 20,
-
-	-- ── Collision severity thresholds (impact speed) ──────────────────────────
-	-- Calibrated to the contained-physics impact distribution (typical clash
-	-- 20–45 studs/s relative): below 28 = glancing Light, 28–50 = committed
-	-- Heavy, 50+ = Smash (reachable mainly through Attack acceleration, which
-	-- makes big hits a skill statement rather than ambient noise).
-	SmashSpeedThreshold = 50,
-	HeavySpeedThreshold = 28,
 
 	-- ── Audio ─────────────────────────────────────────────────────────────────
 	SpinDownAudioThreshold = 30,

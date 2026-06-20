@@ -111,73 +111,62 @@ local function buildStadiumTemplate(stadiumDef)
 		return _stadiumTemplates[stadiumDef.id]
 	end
 
-	local R = stadiumDef.bowlSphereRadius
-	local MAX_R = stadiumDef.playableRadius
-	-- Outer edge sits a little beyond the playable radius, so the visible round
-	-- wall is past the ring-out boundary (a Bey rings out before it reaches it).
-	local outerR = MAX_R + 3
-	local DISH_HEIGHT = 12
-	local DISH_Y = 5 -- centre height: top face Y=11, bottom Y=-1, bowl centre Y=0
-
-	-- Round dish blank: a vertical CYLINDER gives the circular outer edge. A
-	-- Roblox Cylinder lies along its X axis, so rotate it 90 about Z to stand it
-	-- upright; Size.X is then the height and Size.Y/Z the diameter.
-	local dishCFrame = CFrame.new(0, DISH_Y, 0) * CFrame.Angles(0, 0, math.rad(90))
-	local dish = Instance.new("Part")
-	dish.Name = "StadiumFloor"
-	dish.Shape = Enum.PartType.Cylinder
-	dish.Size = Vector3.new(DISH_HEIGHT, outerR * 2, outerR * 2)
-	dish.CFrame = dishCFrame
-
-	-- Sphere to carve the seamless, smooth bowl into the dish. Centred R studs
-	-- up so its lowest point kisses Y=0 (bowl centre); the carved surface is
-	-- exactly y = R - sqrt(R^2 - r^2), matching the simulation floor.
-	local sphere = Instance.new("Part")
-	sphere.Shape = Enum.PartType.Ball
-	sphere.Size = Vector3.new(R * 2, R * 2, R * 2)
-	sphere.CFrame = CFrame.new(0, R, 0)
-
-	-- Generate the smooth bowl via CSG. Inputs are parented while the operation
-	-- runs (CSG can fail on out-of-DataModel parts in some engine paths).
-	dish.Anchored = true
-	sphere.Anchored = true
-	dish.Parent = workspace
-	sphere.Parent = workspace
-	local success, curvyBowl = pcall(function()
-		return dish:SubtractAsync({ sphere }, Enum.CollisionFidelity.Default, Enum.RenderFidelity.Precise)
-	end)
-	sphere:Destroy()
-	if success and curvyBowl then
-		dish:Destroy()
-	else
-		dish.Parent = nil -- keep the round cylinder as the visual fallback below
-	end
-
-	if not success or not curvyBowl then
-		warn("[MatchManager] Failed to carve curvy bowl (CSG error); falling back to a flat round dish.")
-		curvyBowl = dish -- round outer edge is preserved even on CSG failure
-	end
-
-	curvyBowl.Name = "StadiumFloor"
-	curvyBowl.Anchored = true
-	curvyBowl.CanCollide = true
-	curvyBowl.Material = Enum.Material.SmoothPlastic
-	curvyBowl.Color = Color3.fromRGB(245, 245, 250)
+	-- Flat, walled circular arena (no bowl, no ring-out). The wall bounce is
+	-- resolved analytically in PhysicsController; the wall parts are visual only.
+	local R = stadiumDef.radius
+	local floorColor = stadiumDef.floorColor or { 245, 245, 250 }
+	local wallColor = stadiumDef.wallColor or { 90, 130, 255 }
+	local wallHeight = Constants.StadiumWallHeight
 
 	local template = Instance.new("Model")
 	template.Name = "StadiumTemplate"
-	-- SubtractAsync returns the union at the dish's CFrame (rotation included),
-	-- so leave it untouched: the carved geometry is already in place. (The old
-	-- square-block path reset it to (0,5,0); doing that to a rotated union would
-	-- wrongly re-orient it, so we don't.)
-	curvyBowl.Parent = template
-	template.PrimaryPart = curvyBowl
 
-	-- ── Center nub (classic Beyblade stadium center marker) ──────────
+	-- Flat circular floor. A Roblox Cylinder lies along its X axis, so rotate it
+	-- 90° about Z to stand the circular face horizontal; the top face sits at Y=0
+	-- (matching the simulation floor: a Bey renders at Y=0).
+	local FLOOR_THICKNESS = 1
+	local floor = Instance.new("Part")
+	floor.Name = "StadiumFloor"
+	floor.Shape = Enum.PartType.Cylinder
+	floor.Size = Vector3.new(FLOOR_THICKNESS, R * 2, R * 2)
+	floor.CFrame = CFrame.new(0, -FLOOR_THICKNESS / 2, 0) * CFrame.Angles(0, 0, math.rad(90))
+	floor.Anchored = true
+	floor.CanCollide = true
+	floor.Material = Enum.Material.SmoothPlastic
+	floor.Color = Color3.fromRGB(floorColor[1], floorColor[2], floorColor[3])
+	floor.Parent = template
+	template.PrimaryPart = floor
+
+	-- Wall ring: thin tangent segments around the rim (translucent forcefield).
+	local walls = Instance.new("Folder")
+	walls.Name = "StadiumWalls"
+	walls.Parent = template
+	local SEGMENTS = 48
+	local segWidth = (2 * math.pi * R) / SEGMENTS + 0.6
+	for i = 1, SEGMENTS do
+		local ang = (i / SEGMENTS) * math.pi * 2
+		local px, pz = math.cos(ang) * R, math.sin(ang) * R
+		local seg = Instance.new("Part")
+		seg.Name = "Wall_" .. i
+		seg.Size = Vector3.new(segWidth, wallHeight, 0.6) -- X spans tangent after lookAt
+		seg.CFrame = CFrame.lookAt(
+			Vector3.new(px, wallHeight / 2, pz),
+			Vector3.new(0, wallHeight / 2, 0)
+		)
+		seg.Anchored = true
+		seg.CanCollide = false
+		seg.CanQuery = false
+		seg.Material = Enum.Material.ForceField
+		seg.Transparency = 0.25
+		seg.Color = Color3.fromRGB(wallColor[1], wallColor[2], wallColor[3])
+		seg.Parent = walls
+	end
+
+	-- ── Center nub (classic stadium center marker) ──────────
 	local centerMark = Instance.new("Part")
 	centerMark.Name = "StadiumCenter"
-	centerMark.Size = Vector3.new(0.5, 0.2, 0.5)
-	centerMark.CFrame = CFrame.new(0, 0, 0)
+	centerMark.Size = Vector3.new(0.4, 0.2, 0.4)
+	centerMark.CFrame = CFrame.new(0, 0.05, 0) * CFrame.Angles(0, 0, math.rad(90))
 	centerMark.Shape = Enum.PartType.Cylinder
 	centerMark.Anchored = true
 	centerMark.CanCollide = false
@@ -273,6 +262,10 @@ function MatchManager.StartNewMatch(playerIds, options)
 	-- Stadium: explicit pick (casual select, later) or seeded rotation (ranked)
 	newState.stadiumId = options.stadiumId or Stadiums.pickForSeed(matchSeed)
 	local stadiumDef = Stadiums.get(newState.stadiumId)
+	-- Physics reads these per-match so concurrent matches on different stadiums
+	-- stay independent (flat radius + wall restitution).
+	newState.stadiumRadius = stadiumDef.radius
+	newState.stadiumWallBounce = stadiumDef.wallBounce
 
 	-- Begin with the aim-and-ready ceremony; countdown starts when both
 	-- players are READY (or the deadline auto-readies stragglers)
@@ -320,21 +313,14 @@ function MatchManager.StartNewMatch(playerIds, options)
 		end
 	end
 
-	-- Mirrored spawns at half the playable radius — scales with the stadium
-	-- (Classic: ±10, identical to the validated baseline)
-	local spawnRadius = stadiumDef.playableRadius * 0.5
+	-- Mirrored spawns near the rim — scales with the stadium radius.
+	local spawnRadius = stadiumDef.radius * 0.45
+	local floorY = Constants.BeyRadius
 
 	for i, pid in ipairs(playerIds) do
-		local bState = MatchState.createBeyState(pid)
-		-- Held frozen at the spawn point through Setup/Countdown; the launch
-		-- click (or the Poor auto-launch) supplies ALL motion.
-		-- LOCAL space — rendering adds arenaOrigin.
-		local side = (i == 1) and -1 or 1
-		bState.position = Vector3.new(side * spawnRadius, Constants.LaunchHeightDefault, 0)
-		bState.velocity = Vector3.new(0, 0, 0)
-		bState.previousPosition = bState.position
 		-- Resolve the player's crafted build (ADR-003). Bots and profile-less
 		-- sessions use the neutral default → mods stay 1.0 (validated baseline).
+		-- The build drives BOTH the 4 stats and the part-based damage profile.
 		local buildSpec = BeyParts.defaultBuild()
 		if not (newState.bots and newState.bots[pid]) then
 			local profile = ProfileStore.GetProfile(pid)
@@ -342,14 +328,25 @@ function MatchManager.StartNewMatch(playerIds, options)
 				buildSpec = profile.build
 			end
 		end
-		bState.mods = BeyParts.deriveStats(buildSpec).multipliers
+
+		local bState = MatchState.createBeyState(pid, buildSpec)
+		-- Held frozen at the spawn point through Setup/Countdown; the launch
+		-- click (or the Poor auto-launch) supplies ALL motion.
+		-- LOCAL space — rendering adds arenaOrigin.
+		local side = (i == 1) and -1 or 1
+		bState.position = Vector3.new(side * spawnRadius, floorY, 0)
+		bState.velocity = Vector3.new(0, 0, 0)
+		bState.previousPosition = bState.position
+		-- Face the centre before launch (nice pre-GO read; launch overrides it).
+		bState.facingAngle = (side < 0) and 0 or math.pi
+		bState.targetFacing = bState.facingAngle
 		newState.beyStates[pid] = bState
 		newState.pendingAim[pid] = LaunchQuality.defaultAimFor(side)
 
 		-- Build the CRAFTED model AT its spawn point so it is visible immediately,
 		-- before the first snapshot drives the renderer
 		createBeyModel(pid, i == 1, folder,
-			origin + Vector3.new(side * spawnRadius, Constants.LaunchHeightDefault, 0),
+			origin + Vector3.new(side * spawnRadius, floorY, 0),
 			buildSpec)
 	end
 

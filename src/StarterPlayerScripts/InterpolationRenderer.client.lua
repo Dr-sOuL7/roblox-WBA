@@ -1,29 +1,30 @@
 --[=[
 	InterpolationRenderer.client.lua
 	Buffers server snapshots and smoothly lerps Bey CFrame states at render rate.
-	Handles: spin rotation, tilt amplification, hitstop, spin-down audio,
-	         command-state glow + motion trail (TOWARDS/CENTRE/AWAY),
-	         ring-out danger pulse.
+	Handles: spin rotation, tilt amplification, hitstop, spin-down audio, a facing
+	arrow (which never spins with the body), a Dash/Revolve/combo ability glow, and
+	a motion trail tinted by the active ability.
+
+	Multi-match (ADR-001): models live under workspace.Matches[matchId] and the
+	simulation is local arena-space — rendering adds the match's arena origin. The
+	arena is FLAT (no bowl): the Bey renders sitting on the floor at y=0.
 ]=]
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
-local Stadiums = require(ReplicatedStorage:WaitForChild("Stadiums"))
 
 local snapshotBuffer = {}
 local RENDER_DELAY = Constants.InterpolationDelay
 local SNAPSHOT_BUFFER_MAX = Constants.SnapshotBufferMax
+local TWO_PI = math.pi * 2
 
--- Per-player visual state
--- { rotation, hitstop, commandGlow (PointLight), ringOutBox (SelectionBox) }
+-- Per-player visual state: { rotation, hitstop, facing, facingInit, glow, arrow, trail }
 local beyVisuals = {}
 
--- Multi-match (ADR-001): models live under workspace.Matches[matchId] and the
--- simulation is local-space — rendering adds the match's arena origin.
+-- Multi-match (ADR-001): models live under workspace.Matches[matchId].
 local currentMatchId = nil
 local arenaOrigin = Vector3.new(0, 0, 0)
-local bowlSphereRadius = Constants.BowlSphereRadius -- bowl curvature for the surface clamp
 local matchFolder = nil
 
 local missingModelWarned = {} -- "matchId:pid" -> true (one diagnostic per Bey per match)
@@ -40,8 +41,6 @@ local function getBeyModel(pid)
 		if not missingModelWarned[key] then
 			missingModelWarned[key] = true
 			task.delay(2, function()
-				-- Still missing after 2 s of snapshots? That's a replication
-				-- problem worth reporting, not a race.
 				if currentMatchId and not getBeyModel(pid) then
 					warn(string.format("[Renderer] Bey model for %s not replicated in match %s — check StreamingEnabled/ReplicationFocus", tostring(pid), tostring(currentMatchId)))
 				end
@@ -51,54 +50,52 @@ local function getBeyModel(pid)
 	return model
 end
 
--- Lazily create and attach visual effect instances to the Bey model.
 local function ensureVisuals(pid)
 	if beyVisuals[pid] then return beyVisuals[pid] end
-	beyVisuals[pid] = { rotation = 0, hitstop = 0, commandGlow = nil, ringOutBox = nil }
+	beyVisuals[pid] = { rotation = 0, hitstop = 0, facing = 0, facingInit = false }
 	return beyVisuals[pid]
 end
 
--- Bey models are destroyed and rebuilt every rematch, taking attached effect
--- instances with them. A destroyed instance has Parent == nil and can never be
--- reparented, so cached references must be dropped and recreated or the glow,
--- warning box, and audio silently stop working from the second match onward.
+-- Bey models are destroyed and rebuilt every rematch; a destroyed instance has
+-- Parent == nil and can never be reparented, so cached references must be dropped.
 local function isDead(instance)
 	return instance == nil or instance.Parent == nil
 end
 
-local function ensureCommandGlow(pid, model)
+local function ensureAbilityGlow(pid, model)
 	local vis = beyVisuals[pid]
-	if not isDead(vis.commandGlow) then return vis.commandGlow end
+	if not isDead(vis.glow) then return vis.glow end
 	local pivot = model:FindFirstChild("Pivot") or model.PrimaryPart
 	if not pivot then return nil end
 	local light = Instance.new("PointLight")
-	light.Name = "CommandGlow"
+	light.Name = "AbilityGlow"
 	light.Brightness = 0
-	light.Range = 16
+	light.Range = 18
 	light.Shadows = false
 	light.Parent = pivot
-	vis.commandGlow = light
+	vis.glow = light
 	return light
 end
 
-local function ensureRingOutBox(pid, model)
+-- A small neon arrow that shows facing WITHOUT spinning with the Bey body.
+local function ensureFacingArrow(pid, model)
 	local vis = beyVisuals[pid]
-	if not isDead(vis.ringOutBox) then return vis.ringOutBox end
-	local box = Instance.new("SelectionBox")
-	box.Name = "RingOutWarning"
-	box.Color3 = Color3.fromRGB(255, 60, 0)
-	box.LineThickness = 0.08
-	box.SurfaceTransparency = 0.85
-	box.SurfaceColor3 = Color3.fromRGB(255, 60, 0)
-	box.Visible = false
-	box.Adornee = model
-	box.Parent = model
-	vis.ringOutBox = box
-	return box
+	if not isDead(vis.arrow) then return vis.arrow end
+	local arrow = Instance.new("Part")
+	arrow.Name = "FacingArrow"
+	arrow.Size = Vector3.new(0.4, 0.4, 2.4)
+	arrow.Anchored = true
+	arrow.CanCollide = false
+	arrow.CanQuery = false
+	arrow.Material = Enum.Material.Neon
+	arrow.Color = Color3.fromRGB(255, 255, 255)
+	arrow.Parent = model
+	vis.arrow = arrow
+	return arrow
 end
 
--- Motion trail: draws the Bey's actual path so movement reads as movement (not
--- "spin then stop"). Tinted by the active command for at-a-glance feedback.
+-- Motion trail: draws the Bey's path so movement reads as movement. Tinted by the
+-- active ability for at-a-glance feedback.
 local function ensureTrail(pid, model)
 	local vis = beyVisuals[pid]
 	if not isDead(vis.trail) then return vis.trail end
@@ -134,17 +131,11 @@ local function ensureTrail(pid, model)
 end
 
 local TRAIL_NEUTRAL = Color3.fromRGB(180, 210, 255)
-
--- ── Command glow colours ──────────────────────────────────────────────────────
-
-local COMMAND_GLOW = {
-	Attack = { color = Color3.fromRGB(255, 60,  60),  brightness = 3 },
-	Defend = { color = Color3.fromRGB(60,  100, 255), brightness = 3 },
-	Evade  = { color = Color3.fromRGB(60,  220, 60),  brightness = 3 },
-}
+local GLOW_COMBO = Color3.fromRGB(255, 90, 230)
+local GLOW_DASH = Color3.fromRGB(255, 110, 40)
+local GLOW_REVOLVE = Color3.fromRGB(120, 90, 255)
 
 -- ── Collision audio ───────────────────────────────────────────────────────────
-
 local COLLISION_SOUNDS = {
 	Light = { id = "", pitch = 1.3, volume = 0.25 },
 	Heavy = { id = "", pitch = 1.0, volume = 0.6 },
@@ -164,7 +155,6 @@ local function playCollisionSound(severity)
 end
 
 -- ── Spin-down audio ───────────────────────────────────────────────────────────
-
 local spinDownSounds = {}
 
 local function updateSpinDownAudio(pid, angMag)
@@ -172,7 +162,6 @@ local function updateSpinDownAudio(pid, angMag)
 	local model = getBeyModel(pid)
 	if not model then return end
 
-	-- Drop references to sounds destroyed with last match's Bey model
 	if spinDownSounds[pid] and spinDownSounds[pid].Parent == nil then
 		spinDownSounds[pid] = nil
 	end
@@ -201,17 +190,22 @@ local function updateSpinDownAudio(pid, angMag)
 	end
 end
 
--- ── Snapshot receive ──────────────────────────────────────────────────────────
+-- ── Angular lerp helper ─────────────────────────────────────────────────────────
+local function lerpAngle(a, b, t)
+	local diff = (b - a + math.pi) % TWO_PI - math.pi
+	return a + diff * t
+end
 
+-- ── Snapshot receive ──────────────────────────────────────────────────────────
 Remotes.StateSnapshot.OnClientEvent:Connect(function(snapshot)
-	-- New match: drop stale snapshots so interpolation never lerps across matches
+	-- New match: drop stale snapshots + visuals so nothing lerps across matches.
 	if snapshot.matchId ~= currentMatchId then
 		currentMatchId = snapshot.matchId
 		arenaOrigin = snapshot.arenaOrigin or Vector3.new(0, 0, 0)
-		bowlSphereRadius = (snapshot.stadiumId and Stadiums.get(snapshot.stadiumId).bowlSphereRadius)
-			or Constants.BowlSphereRadius
 		matchFolder = nil
 		table.clear(snapshotBuffer)
+		table.clear(beyVisuals)
+		table.clear(spinDownSounds)
 	end
 
 	table.insert(snapshotBuffer, snapshot)
@@ -241,11 +235,7 @@ Remotes.StateSnapshot.OnClientEvent:Connect(function(snapshot)
 end)
 
 -- ── Render loop ───────────────────────────────────────────────────────────────
-
-local ringOutPulseTime = 0
-
 RunService.RenderStepped:Connect(function(dt)
-	ringOutPulseTime += dt
 	local renderTime = workspace:GetServerTimeNow() - RENDER_DELAY
 
 	local snap0, snap1 = nil, nil
@@ -256,7 +246,6 @@ RunService.RenderStepped:Connect(function(dt)
 			break
 		end
 	end
-
 	if not snap0 then return end
 
 	local alpha = 0
@@ -269,75 +258,67 @@ RunService.RenderStepped:Connect(function(dt)
 		local vis = ensureVisuals(pid)
 		local model = getBeyModel(pid)
 
-		-- Hitstop freeze
 		if vis.hitstop > 0 then
 			vis.hitstop -= dt
 			continue
 		end
 
-		-- Spin accumulation
 		local angMag = bState0.angularVelocity.Magnitude
 		vis.rotation += angMag * dt
-
 		updateSpinDownAudio(pid, angMag)
 
-		if model then
-			-- Position
-			local pos = bState0.position
-			if snap1 then
-				local bState1 = snap1.beyStates[pid]
-				if bState1 then
-					pos = bState0.position:Lerp(bState1.position, alpha)
-				end
-			end
+		if not model then continue end
+		if model:GetAttribute("Shattering") then continue end -- break animation owns it now
 
-			-- Keep the Bey's tip ON the bowl surface, never inside it. The sim floor
-			-- is y = R - sqrt(R^2 - r^2); a straight lerp between two grounded
-			-- snapshots cuts under the curve, so clamp the rendered height up to the
-			-- surface. Anything above is left alone, so pops and jumps still read as air.
-			local r2 = pos.X * pos.X + pos.Z * pos.Z
-			if r2 < bowlSphereRadius * bowlSphereRadius then
-				local surfaceY = bowlSphereRadius - math.sqrt(bowlSphereRadius * bowlSphereRadius - r2)
-				if pos.Y < surfaceY then
-					pos = Vector3.new(pos.X, surfaceY, pos.Z)
-				end
+		-- Position (lerp), rendered so the Bey sits on the flat floor (top at y=0).
+		local pos = bState0.position
+		local targetFacing = bState0.facingAngle or 0
+		if snap1 then
+			local bState1 = snap1.beyStates[pid]
+			if bState1 then
+				pos = bState0.position:Lerp(bState1.position, alpha)
+				targetFacing = lerpAngle(bState0.facingAngle or 0, bState1.facingAngle or 0, alpha)
 			end
+		end
+		local renderPos = Vector3.new(pos.X, math.max(0, pos.Y - Constants.BeyRadius), pos.Z) + arenaOrigin
 
-			-- Tilt amplified 1.5x for readability — makes wobble unmistakable
-			local tiltAngle = math.rad(bState0.tilt * 1.5)
-			model:PivotTo(CFrame.new(pos + arenaOrigin) * CFrame.Angles(tiltAngle, vis.rotation, 0))
+		-- Smooth the displayed facing.
+		if not vis.facingInit then
+			vis.facing = targetFacing
+			vis.facingInit = true
+		else
+			vis.facing = lerpAngle(vis.facing, targetFacing, math.clamp(dt * 12, 0, 1))
+		end
 
-			-- ── Command glow ──────────────────────────────────────────────
-			local cmd = bState0.currentCommand
-			local cmdStyle = cmd and COMMAND_GLOW[cmd] or nil
-			local glow = ensureCommandGlow(pid, model)
-			if glow then
-				if cmdStyle then
-					glow.Color = cmdStyle.color
-					glow.Brightness = cmdStyle.brightness
-				else
-					glow.Brightness = 0
-				end
-			end
+		-- Tilt amplified 1.5× for readability.
+		local tiltAngle = math.rad((bState0.tilt or 0) * 1.5)
+		model:PivotTo(CFrame.new(renderPos) * CFrame.Angles(tiltAngle, vis.rotation, 0))
 
-			-- Motion trail tinted by the active command (TOWARDS/CENTRE/AWAY)
-			local trail = ensureTrail(pid, model)
-			if trail then
-				trail.Color = ColorSequence.new(cmdStyle and cmdStyle.color or TRAIL_NEUTRAL)
-			end
+		-- Facing arrow: positioned/oriented AFTER PivotTo so it doesn't spin.
+		local arrow = ensureFacingArrow(pid, model)
+		if arrow then
+			local fdir = Vector3.new(math.cos(vis.facing), 0, math.sin(vis.facing))
+			local arrowCenter = renderPos + Vector3.new(0, Constants.BeyRadius + 1.6, 0) + fdir * (Constants.BeyRadius + 0.6)
+			arrow.CFrame = CFrame.lookAt(arrowCenter, arrowCenter + fdir)
+		end
 
-			-- ── Ring-out danger pulse ─────────────────────────────────────
-			local ringBox = ensureRingOutBox(pid, model)
-			if ringBox then
-				if bState0.zoneState == "RingOut" then
-					ringBox.Visible = true
-					-- 5 Hz pulse: transparency oscillates 0.6–0.9
-					local pulse = 0.75 + 0.15 * math.sin(ringOutPulseTime * math.pi * 10)
-					ringBox.SurfaceTransparency = pulse
-				else
-					ringBox.Visible = false
-				end
-			end
+		-- Ability glow + trail tint (combo / dash / revolve).
+		local glow = ensureAbilityGlow(pid, model)
+		local trail = ensureTrail(pid, model)
+		local glowColor, brightness = nil, 0
+		if bState0.isDashing and bState0.isRevolving then
+			glowColor, brightness = GLOW_COMBO, 4
+		elseif bState0.isDashing then
+			glowColor, brightness = GLOW_DASH, 4
+		elseif bState0.isRevolving then
+			glowColor, brightness = GLOW_REVOLVE, 3.5
+		end
+		if glow then
+			if glowColor then glow.Color = glowColor end
+			glow.Brightness = brightness
+		end
+		if trail then
+			trail.Color = ColorSequence.new(glowColor or TRAIL_NEUTRAL)
 		end
 	end
 end)

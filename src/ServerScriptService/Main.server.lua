@@ -2,13 +2,16 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
--- Players pilot Beys, not avatars. Without this, characters spawn at the
--- default origin spawn — inside the stadium bowl the camera frames.
+-- Players pilot Beys in the hub, not during battle. Without this, characters
+-- spawn at the default origin spawn instead of the hub lobby.
 Players.CharacterAutoLoads = false
 
 local MatchManager = require(script.Parent:WaitForChild("MatchManager"))
 
--- Require all controllers to register their TickManager phases
+-- Require all controllers to register their TickManager phases. BotController is
+-- required BEFORE BeyController so its Input handler runs first and the bot's
+-- analog buffer is fresh when BeyController applies it the same tick.
+require(script.Parent:WaitForChild("BotController"))
 require(script.Parent:WaitForChild("BeyController"))
 require(script.Parent:WaitForChild("PhysicsController"))
 require(script.Parent:WaitForChild("CollisionClassifier"))
@@ -16,7 +19,6 @@ require(script.Parent:WaitForChild("SpinEvaluator"))
 require(script.Parent:WaitForChild("ReplayRecorder"))
 require(script.Parent:WaitForChild("TelemetryLogger"))
 require(script.Parent:WaitForChild("DebugStatePublisher"))
-require(script.Parent:WaitForChild("BotController"))
 
 local SimulationHarness = require(script.Parent:WaitForChild("SimulationHarness"))
 
@@ -43,7 +45,7 @@ end
 
 local Remotes = require(game:GetService("ReplicatedStorage"):WaitForChild("Remotes"))
 local LaunchValidator = require(script.Parent:WaitForChild("LaunchValidator"))
-local CommandValidator = require(script.Parent:WaitForChild("CommandValidator"))
+local InputValidator = require(script.Parent:WaitForChild("InputValidator"))
 
 -- Persistence layer (Phase 2): profile load/release lifecycle + stats recording
 local PersistenceFolder = script.Parent:WaitForChild("Persistence")
@@ -133,7 +135,7 @@ Remotes.RequestReady.OnServerEvent:Connect(function(player, aim)
     MatchManager.HandleReady(player, aim)
 end)
 
--- Handle battle command requests from clients
-Remotes.RequestCommand.OnServerEvent:Connect(function(player, sequenceId, command)
-    CommandValidator.ValidateAndQueue(player, sequenceId, command)
+-- Handle continuous analog battle input (joystick facing + Dash/Revolve held)
+Remotes.InputUpdate.OnServerEvent:Connect(function(player, packet)
+    InputValidator.HandleInput(player, packet)
 end)

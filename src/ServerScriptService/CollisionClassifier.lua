@@ -1,21 +1,24 @@
 --[=[
     CollisionClassifier.lua
     Responsible for categorizing collisions (Light, Heavy, Smash) for telemetry and VFX.
-    DOES NOT mutate gameplay state (the per-tick id sequence lives on MatchState
-    so concurrent matches never share a counter).
+    DOES NOT mutate gameplay state.
 ]=]
 local CollisionClassifier = {}
 
-function CollisionClassifier.ResetTickCounter(matchState)
-    matchState.collisionSeqCounter = 0
+-- Maintain a sequence counter per tick to ensure unique deterministic IDs
+local tickSequenceCounter = 0
+
+function CollisionClassifier.ResetTickCounter()
+    tickSequenceCounter = 0
 end
 
--- Called by PhysicsController after an overlap resolves
-function CollisionClassifier.Classify(matchState, beyA, beyB, severityClass, contactPosition)
-    matchState.collisionSeqCounter = (matchState.collisionSeqCounter or 0) + 1
+-- Called by PhysicsController after an overlap resolves.
+-- `zones` (optional): { zoneOnA, zoneOnB } — which part-zone each Bey was struck on.
+function CollisionClassifier.Classify(matchState, beyA, beyB, severityClass, contactPosition, zones)
+    tickSequenceCounter += 1
 
     local minId, maxId = math.min(beyA.playerId, beyB.playerId), math.max(beyA.playerId, beyB.playerId)
-    local collisionId = string.format("%d_%d_%d_%d", matchState.tickNumber, minId, maxId, matchState.collisionSeqCounter)
+    local collisionId = string.format("%d_%d_%d_%d", matchState.tickNumber, minId, maxId, tickSequenceCounter)
 
     -- Emit event to MatchState tickEvents for Replay/Replication
     table.insert(matchState.tickEvents, {
@@ -25,7 +28,9 @@ function CollisionClassifier.Classify(matchState, beyA, beyB, severityClass, con
             tickNumber = matchState.tickNumber,
             involvedBeys = {beyA.playerId, beyB.playerId},
             collisionClass = severityClass,
-            position = contactPosition
+            position = contactPosition,
+            zoneOnA = zones and zones.zoneOnA or nil,
+            zoneOnB = zones and zones.zoneOnB or nil,
         }
     })
 end

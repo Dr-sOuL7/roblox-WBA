@@ -1,6 +1,12 @@
 --[=[
 	UIController.client.lua
-	Match UI: status labels, countdown, result screen, and battle command buttons.
+	Battle + meta HUD:
+	  • status / countdown / result labels,
+	  • the launch ceremony (Setup → aim sliders → READY → 3·2·1·GO → LAUNCH/F),
+	  • per-Bey HP + Mana bars (battle),
+	  • queue / rank / skin panels (hub).
+	Battle steering (joystick + Dash/Revolve) lives in InputController; the camera
+	toggle lives in SpectatorCameraController.
 ]=]
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -53,100 +59,84 @@ resultLabel.Text = ""
 resultLabel.Visible = false
 resultLabel.Parent = screenGui
 
--- ── Command button panel (bottom centre) ──────────────────────────────────────
+-- ── Per-Bey HP + Mana bars ─────────────────────────────────────────────────────
+-- A stat block = name + HP bar + Mana bar. `side` is "left" (you) or "right" (opp).
 
-local commandPanel = Instance.new("Frame")
-commandPanel.Name = "CommandPanel"
-commandPanel.Size = UDim2.fromOffset(450, 80)
-commandPanel.Position = UDim2.new(0.5, -225, 1, -110)
-commandPanel.BackgroundTransparency = 1
-commandPanel.Visible = false
-commandPanel.Parent = screenGui
+local function makeStatBlock(side, title)
+	local holder = Instance.new("Frame")
+	holder.Name = "Stat_" .. side
+	holder.Size = UDim2.fromOffset(340, 86)
+	holder.BackgroundTransparency = 1
+	holder.AnchorPoint = Vector2.new(side == "left" and 0 or 1, 0)
+	holder.Position = side == "left" and UDim2.new(0, 16, 0, 8) or UDim2.new(1, -16, 0, 8)
+	holder.Visible = false
+	holder.Parent = screenGui
 
-local panelLayout = Instance.new("UIListLayout")
-panelLayout.FillDirection = Enum.FillDirection.Horizontal
-panelLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-panelLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-panelLayout.Padding = UDim.new(0, 10)
-panelLayout.Parent = commandPanel
+	local name = Instance.new("TextLabel")
+	name.Size = UDim2.new(1, 0, 0, 22)
+	name.BackgroundTransparency = 1
+	name.Font = Enum.Font.GothamBold
+	name.TextSize = 18
+	name.TextColor3 = Color3.new(1, 1, 1)
+	name.TextStrokeTransparency = 0.3
+	name.TextXAlignment = side == "left" and Enum.TextXAlignment.Left or Enum.TextXAlignment.Right
+	name.Text = title
+	name.Parent = holder
 
--- Player-facing labels describe what the steering force DOES so intent is
--- obvious (TOWARDS the opponent / to the CENTRE / AWAY from the opponent).
--- `name` stays the wire/physics id (Attack/Defend/Evade) the server validates.
-local COMMAND_DEFS = {
-	{ name = "Attack",  label = "TOWARDS", desc = "lunge at opponent",  color = Color3.fromRGB(220, 50,  50)  },
-	{ name = "Defend",  label = "CENTRE",  desc = "pull to the middle", color = Color3.fromRGB(50,  100, 220) },
-	{ name = "Evade",   label = "AWAY",    desc = "dodge away",         color = Color3.fromRGB(50,  200, 80)  },
-}
+	local function bar(yOffset, bgColor)
+		local back = Instance.new("Frame")
+		back.Size = UDim2.new(1, 0, 0, 26)
+		back.Position = UDim2.new(0, 0, 0, yOffset)
+		back.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+		back.BackgroundTransparency = 0.25
+		back.Parent = holder
+		local bc = Instance.new("UICorner")
+		bc.CornerRadius = UDim.new(0, 6)
+		bc.Parent = back
 
-local buttons = {}
-local commandSequenceId = 0
+		local fill = Instance.new("Frame")
+		fill.Size = UDim2.new(1, 0, 1, 0)
+		fill.BackgroundColor3 = bgColor
+		fill.BorderSizePixel = 0
+		fill.Parent = back
+		local fc = Instance.new("UICorner")
+		fc.CornerRadius = UDim.new(0, 6)
+		fc.Parent = fill
 
--- Command state tracking (client-predicted)
-local activeCommand = nil
-local commandActiveTimer = 0       -- seconds remaining on active command
-local commandCooldownTimer = 0     -- seconds remaining on cooldown
-
-local CMD_DURATION = Constants.CommandDurationTicks / Constants.SimulationTickRate
-local CMD_COOLDOWN = Constants.CommandCooldownTicks / Constants.SimulationTickRate
-
-local function createButton(def)
-	local btn = Instance.new("TextButton")
-	btn.Name = def.name
-	btn.Size = UDim2.fromOffset(130, 64)
-	btn.BackgroundColor3 = def.color
-	btn.BorderSizePixel = 0
-	btn.Font = Enum.Font.GothamBold
-	btn.TextSize = 22
-	btn.TextColor3 = Color3.new(1, 1, 1)
-	btn.Text = def.label
-	btn.AutoButtonColor = false
-
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 8)
-	corner.Parent = btn
-
-	btn.Parent = commandPanel
-
-	btn.MouseButton1Click:Connect(function()
-		if commandActiveTimer > 0 or commandCooldownTimer > 0 then return end
-		commandSequenceId += 1
-		Remotes.RequestCommand:FireServer(commandSequenceId, def.name)
-		-- Optimistic local state
-		activeCommand = def.name
-		commandActiveTimer = CMD_DURATION
-		commandCooldownTimer = 0
-	end)
-
-	buttons[def.name] = { button = btn, baseColor = def.color, label = def.label, desc = def.desc }
-end
-
-for _, def in ipairs(COMMAND_DEFS) do
-	createButton(def)
-end
-
--- Human-readable text for the active-command banner ("TOWARDS — lunge at opponent")
-local function describeActive(cmdName)
-	local e = buttons[cmdName]
-	if e then
-		return e.label .. (e.desc and ("  —  " .. e.desc) or "")
+		local lbl = Instance.new("TextLabel")
+		lbl.Size = UDim2.new(1, -8, 1, 0)
+		lbl.Position = UDim2.new(0, 4, 0, 0)
+		lbl.BackgroundTransparency = 1
+		lbl.Font = Enum.Font.GothamBold
+		lbl.TextSize = 15
+		lbl.TextColor3 = Color3.new(1, 1, 1)
+		lbl.TextStrokeTransparency = 0.4
+		lbl.TextXAlignment = Enum.TextXAlignment.Left
+		lbl.Parent = back
+		return fill, lbl
 	end
-	return string.upper(cmdName)
+
+	local hpFill, hpLbl = bar(28, Color3.fromRGB(60, 220, 80))
+	local manaFill, manaLbl = bar(58, Color3.fromRGB(60, 170, 255))
+	return { hpFill = hpFill, hpLbl = hpLbl, manaFill = manaFill, manaLbl = manaLbl, holder = holder }
 end
 
--- Active command label (shows which command is running)
-local activeCommandLabel = Instance.new("TextLabel")
-activeCommandLabel.Name = "ActiveCommandLabel"
-activeCommandLabel.Size = UDim2.fromOffset(450, 30)
-activeCommandLabel.Position = UDim2.new(0.5, -225, 1, -145)
-activeCommandLabel.BackgroundTransparency = 1
-activeCommandLabel.Font = Enum.Font.Gotham
-activeCommandLabel.TextSize = 18
-activeCommandLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
-activeCommandLabel.TextStrokeTransparency = 0
-activeCommandLabel.Text = ""
-activeCommandLabel.Visible = false
-activeCommandLabel.Parent = screenGui
+local leftBlock = makeStatBlock("left", "YOU")
+local rightBlock = makeStatBlock("right", "OPPONENT")
+
+local function setStatBlocksVisible(visible)
+	leftBlock.holder.Visible = visible
+	rightBlock.holder.Visible = visible
+end
+
+local function hpColor(ratio)
+	if ratio > 0.6 then
+		return Color3.fromRGB(60, 220, 80)
+	elseif ratio > 0.3 then
+		return Color3.fromRGB(235, 200, 60)
+	end
+	return Color3.fromRGB(235, 70, 60)
+end
 
 -- ── Match phase state (declared early: ceremony handlers close over these) ───
 
@@ -376,7 +366,7 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	end
 end)
 
--- ── Queue & rank panel (Phase 2) ──────────────────────────────────────────────
+-- ── Queue & rank panel (hub) ───────────────────────────────────────────────────
 
 local queuePanel = Instance.new("Frame")
 queuePanel.Name = "QueuePanel"
@@ -462,18 +452,15 @@ rankedButton.MouseButton1Click:Connect(function()
 end)
 
 stadiumButton.MouseButton1Click:Connect(function()
-	-- nil → ROTATION[1] → ROTATION[2] → ... → nil
 	local idx = stadiumPref and table.find(Stadiums.ROTATION, stadiumPref) or 0
 	idx += 1
 	stadiumPref = Stadiums.ROTATION[idx] -- past the end → nil → Rotation
 	stadiumButton.Text = "Stadium: "
 		.. (stadiumPref and Stadiums.get(stadiumPref).displayName or "Rotation")
-	-- Re-assert the casual queue with the new preference (server validates;
-	-- ranked ignores preferences entirely)
 	Remotes.RequestQueue:FireServer("Casual", stadiumPref)
 end)
 
--- ── Skin equip panel ──────────────────────────────────────────────────────────
+-- ── Skin equip panel (hub) ──────────────────────────────────────────────────────
 
 local skinPanel = Instance.new("Frame")
 skinPanel.Name = "SkinPanel"
@@ -542,6 +529,12 @@ end
 
 buildSwatches(Cosmetics.ownedSkinIds(nil)) -- starter set until the profile arrives
 
+-- Hub-only panels: hidden during a battle so the HP/Mana bars own the top corners.
+local function setHubPanelsVisible(visible)
+	queuePanel.Visible = visible
+	skinPanel.Visible = visible
+end
+
 Remotes.QueueStatus.OnClientEvent:Connect(function(status)
 	if status.state == "Queued" then
 		queueStateLabel.Text = "Queue: " .. status.mode .. " (searching...)"
@@ -577,13 +570,51 @@ Remotes.MmrUpdated.OnClientEvent:Connect(function(update)
 	end)
 end)
 
--- ── Snapshot-driven prediction constants ──────────────────────────────────────
+-- ── HP / Mana bar state (snapshot-driven) ───────────────────────────────────────
 
-local TICK_SECONDS = 1 / Constants.SimulationTickRate
+local targets = {}   -- [pid] = { hp, maxHp, mana, maxMana }
+local displayed = {} -- smoothed values
+local sideMap = { left = nil, right = nil }
 
--- Correct client prediction from server snapshots (handles rejected commands, latency races)
+-- Snapshot beyStates are STRING-keyed (remote serialization canon); compare ids
+-- as strings so the local player resolves to the left block.
+local function resolveSides(idSet)
+	local localId = tostring(localPlayer.UserId)
+	local oppId = nil
+	for pid in pairs(idSet) do
+		if pid ~= localId then
+			oppId = pid
+			break
+		end
+	end
+	if not idSet[localId] then
+		local ids = {}
+		for pid in pairs(idSet) do table.insert(ids, pid) end
+		table.sort(ids)
+		localId = ids[1]
+		oppId = ids[2]
+	end
+	return localId, oppId
+end
+
+local function updateBlock(block, pid)
+	if not pid or not targets[pid] then return end
+	local t = targets[pid]
+	local d = displayed[pid]
+	d.hp = d.hp + (t.hp - d.hp) * 0.2
+	d.mana = d.mana + (t.mana - d.mana) * 0.2
+	local hpRatio = math.clamp(d.hp / math.max(1, t.maxHp), 0, 1)
+	local manaRatio = math.clamp(d.mana / math.max(1, t.maxMana), 0, 1)
+	block.hpFill.Size = UDim2.new(hpRatio, 0, 1, 0)
+	block.hpFill.BackgroundColor3 = hpColor(hpRatio)
+	block.hpLbl.Text = string.format("HP  %d", math.floor(d.hp + 0.5))
+	block.manaFill.Size = UDim2.new(manaRatio, 0, 1, 0)
+	block.manaLbl.Text = string.format("MANA  %d", math.floor(d.mana + 0.5))
+end
+
+-- ── Snapshot handler: launch grade verdicts + HP/Mana bar targets ───────────────
+
 Remotes.StateSnapshot.OnClientEvent:Connect(function(snapshot)
-	-- Launch grade verdicts arrive as tick events in the snapshot stream
 	if snapshot.events then
 		for _, ev in ipairs(snapshot.events) do
 			if ev.eventType == "LaunchGraded" and ev.eventData.playerId == localPlayer.UserId then
@@ -594,23 +625,19 @@ Remotes.StateSnapshot.OnClientEvent:Connect(function(snapshot)
 		end
 	end
 
-	if currentPhase ~= "Active" then return end
-	-- Snapshot beyStates are STRING-keyed (remote serialization canon)
-	local localState = snapshot.beyStates and snapshot.beyStates[tostring(localPlayer.UserId)]
-	if not localState then return end
-	-- Server says no command active: clear any stale local prediction immediately
-	if localState.currentCommand == nil and activeCommand ~= nil then
-		activeCommand = nil
-		commandActiveTimer = 0
-	end
-	-- Sync cooldown: if server and client disagree by more than 2 ticks, snap to server value
-	local serverCooldownSec = (localState.commandCooldownTimer or 0) * TICK_SECONDS
-	if math.abs(commandCooldownTimer - serverCooldownSec) > (2 * TICK_SECONDS) then
-		commandCooldownTimer = serverCooldownSec
+	if not snapshot.beyStates then return end
+	for pid, st in pairs(snapshot.beyStates) do
+		if st.hp ~= nil then
+			targets[pid] = { hp = st.hp, maxHp = st.maxHp or 100, mana = st.mana or 0, maxMana = st.maxMana or 100 }
+			if not displayed[pid] then
+				displayed[pid] = { hp = st.hp, mana = st.mana or 0 }
+			end
+		end
 	end
 end)
 
--- Stadium reveal (ranked rotation surprise / casual confirmation)
+-- ── Stadium reveal (ranked rotation surprise / casual confirmation) ─────────────
+
 local stadiumRevealLabel = Instance.new("TextLabel")
 stadiumRevealLabel.Name = "StadiumReveal"
 stadiumRevealLabel.Size = UDim2.new(1, 0, 0, 24)
@@ -631,14 +658,21 @@ Remotes.MatchStateChanged.OnClientEvent:Connect(function(phase, data)
 		stadiumRevealLabel.Visible = (phase ~= "Finished")
 	end
 
+	-- Any battle phase hides the hub panels and shows the battle HUD bars.
+	local inBattle = (phase == "Setup" or phase == "Countdown" or phase == "Active" or phase == "Finished")
+	setHubPanelsVisible(not inBattle)
+	setStatBlocksVisible(inBattle)
+
 	if phase == "Setup" then
 		setupDeadline = data.setupDeadline or setupDeadline
 		resultLabel.Visible = false
-		commandPanel.Visible = false
-		activeCommandLabel.Visible = false
 		launchButton.Visible = false
 		hasLaunched = false
-		-- Fresh match: re-arm READY and default the aim for our seat
+		-- Fresh match: reset bars + sides
+		sideMap.left, sideMap.right = nil, nil
+		table.clear(targets)
+		table.clear(displayed)
+		-- Re-arm READY and default the aim for our seat
 		if not (data.resync or data.ready) or not isReady then
 			if data.players then
 				for index, pid in ipairs(data.players) do
@@ -686,18 +720,10 @@ Remotes.MatchStateChanged.OnClientEvent:Connect(function(phase, data)
 		countdownEndTime = data.countdownEndTime or countdownEndTime
 		setupPanel.Visible = false
 		resultLabel.Visible = false
-		commandPanel.Visible = false
-		activeCommandLabel.Visible = false
 		launchButton.Visible = not hasLaunched
 
 	elseif phase == "Active" then
 		statusLabel.Text = "GO!  SHOOT!"
-		commandPanel.Visible = true
-		activeCommandLabel.Visible = true
-		-- Reset local command prediction
-		activeCommand = nil
-		commandActiveTimer = 0
-		commandCooldownTimer = 0
 		task.delay(2, function()
 			if currentPhase == "Active" then
 				statusLabel.Text = ""
@@ -706,8 +732,6 @@ Remotes.MatchStateChanged.OnClientEvent:Connect(function(phase, data)
 
 	elseif phase == "Finished" then
 		statusLabel.Text = "MATCH FINISHED"
-		commandPanel.Visible = false
-		activeCommandLabel.Visible = false
 		setupPanel.Visible = false
 		launchButton.Visible = false
 		resultLabel.Visible = true
@@ -732,7 +756,7 @@ end)
 
 -- ── Per-frame update ──────────────────────────────────────────────────────────
 
-RunService.RenderStepped:Connect(function(dt)
+RunService.RenderStepped:Connect(function()
 	-- Setup: show the auto-ready countdown so nobody is surprised
 	if currentPhase == "Setup" and not isReady and setupDeadline > 0 then
 		local left = setupDeadline - workspace:GetServerTimeNow()
@@ -751,53 +775,12 @@ RunService.RenderStepped:Connect(function(dt)
 		end
 	end
 
-	-- Command timer prediction
-	if currentPhase == "Active" then
-		if commandActiveTimer > 0 then
-			commandActiveTimer = math.max(0, commandActiveTimer - dt)
-			if commandActiveTimer == 0 then
-				activeCommand = nil
-				commandCooldownTimer = CMD_COOLDOWN
-			end
-		elseif commandCooldownTimer > 0 then
-			commandCooldownTimer = math.max(0, commandCooldownTimer - dt)
-		end
-
-		-- Update button visuals
-		local canIssue = (commandActiveTimer == 0 and commandCooldownTimer == 0)
-		for _, def in ipairs(COMMAND_DEFS) do
-			local cmdName = def.name
-			local entry = buttons[cmdName]
-			if not entry then continue end
-			local btn = entry.button
-			local isActive = (cmdName == activeCommand)
-			local isCooling = (not isActive and not canIssue)
-
-			if isActive then
-				btn.BackgroundColor3 = Color3.new(1, 1, 1)
-				btn.TextColor3 = entry.baseColor
-				btn.Text = string.format("%s (%.1f)", entry.label, commandActiveTimer)
-				btn.BackgroundTransparency = 0
-			elseif isCooling then
-				btn.BackgroundColor3 = entry.baseColor
-				btn.TextColor3 = Color3.fromRGB(180, 180, 180)
-				btn.Text = entry.label
-				btn.BackgroundTransparency = 0.55
-			else
-				btn.BackgroundColor3 = entry.baseColor
-				btn.TextColor3 = Color3.new(1, 1, 1)
-				btn.Text = entry.label
-				btn.BackgroundTransparency = 0
-			end
-		end
-
-		-- Active command label
-		if activeCommand then
-			activeCommandLabel.Text = "► " .. describeActive(activeCommand)
-		elseif commandCooldownTimer > 0 then
-			activeCommandLabel.Text = string.format("Cooldown: %.1fs", commandCooldownTimer)
-		else
-			activeCommandLabel.Text = ""
-		end
+	-- HP / Mana bars (resolve sides once snapshot data exists, then smooth)
+	if not sideMap.left and next(targets) then
+		local idSet = {}
+		for pid in pairs(targets) do idSet[pid] = true end
+		sideMap.left, sideMap.right = resolveSides(idSet)
 	end
+	updateBlock(leftBlock, sideMap.left)
+	updateBlock(rightBlock, sideMap.right)
 end)

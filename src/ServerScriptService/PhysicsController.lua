@@ -1,24 +1,130 @@
 --[=[
 	PhysicsController.lua
-	Owns all physics simulation: movement, gravity, floor, collision, and steering.
+	Owns all physics simulation for the flat, walled arena.
 
-	Sub-step architecture:
-	  OnPhysicsPhase runs CollisionSubSteps iterations per tick.
-	  Each sub-step: integrate position → apply forces → detect/resolve collisions.
-	  This prevents tunneling at high speeds without changing the tick rate.
+	Movement model (per the design):
+	  • NEITHER ability held → real-world physics: momentum carries, friction bleeds
+	    it off naturally. The joystick only re-orients the Bey's facing.
+	  • DASH held            → the Bey is driven to 3× base speed along its facing.
+	    On release the velocity is NOT reset — momentum is retained and decays
+	    naturally via floor friction.
+	  • REVOLVE held         → a strong centripetal force curves the path into a
+	    circular orbit near the wall (gravity-assist style).
+	  • DASH + REVOLVE held  → revolve at 3× speed.
+	  Dash and Revolve both spend Mana; at 0 Mana they auto-cancel.
 
-	OnCollisionPhase is kept registered but empty — collision now lives inside the sub-step loop.
-	OnClampPhase is pure safety: NaN protection and hard velocity cap only.
+	Walls bounce the Bey (restitution), deal a small impact-scaled HP nick + tilt,
+	and charge Mana — no ring-out. Bey-vs-Bey collisions deal part-based damage
+	(see DamageModel) across HP, stability, tilt and spin, plus self-recoil.
+
+	Per-match stadium radius (ADR-001/Stadiums): each match reads its own radius so
+	concurrent matches on different stadiums stay independent.
+
+	Sub-step architecture preserved: CollisionSubSteps iterations per tick prevent
+	tunnelling at dash speeds.
 ]=]
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Constants = require(ReplicatedStorage:WaitForChild("Constants"))
-local Stadiums = require(ReplicatedStorage:WaitForChild("Stadiums"))
 local TickManager = require(script.Parent:WaitForChild("TickManager"))
 local CollisionClassifier = require(script.Parent:WaitForChild("CollisionClassifier"))
+local DamageModel = require(script.Parent:WaitForChild("DamageModel"))
 
 local PhysicsController = {}
 
--- ── Private: one collision pass for the current sub-step positions ────────────
+local TWO_PI = math.pi * 2
+
+-- Turn `current` toward `target` (radians) by at most `maxStep`, shortest path.
+local function angleTowards(current, target, maxStep)
+	local diff = (target - current + math.pi) % TWO_PI - math.pi
+	if diff > maxStep then
+		diff = maxStep
+	elseif diff < -maxStep then
+		diff = -maxStep
+	end
+	return current + diff
+end
+
+-- Cap any single HP loss so no one event can remove more than a fixed fraction.
+local function applyCappedHp(target, dmg)
+	if dmg <= 0 then return end
+	dmg = math.min(dmg, target.maxHp * Constants.HpDamageMaxFrac)
+	target.hp = math.max(0, target.hp - dmg)
+end
+
+-- ── Finish helpers ────────────────────────────────────────────────────────────
+
+local function finishBey(matchState, bState, reason)
+	if bState.zoneState == "Finished" then return end
+	bState.zoneState = "Finished"
+	bState.finishReason = reason
+	bState.velocity = Vector3.new(0, 0, 0)
+	bState.angularVelocity = Vector3.new(0, 0, 0)
+	bState.isDashing = false
+	bState.isRevolving = false
+
+	table.insert(matchState.tickEvents, {
+		eventType = "BeyFinished",
+		eventData = { playerId = bState.playerId, reason = reason },
+	})
+	if reason == "HpBreak" then
+		table.insert(matchState.tickEvents, {
+			eventType = "HpBreak",
+			eventData = { playerId = bState.playerId, position = bState.position },
+		})
+	end
+end
+
+local function checkBreak(matchState, bState)
+	if bState.hp <= 0 and bState.zoneState ~= "Finished" then
+		finishBey(matchState, bState, "HpBreak")
+	end
+end
+
+-- ── Revolve orbit: centripetal pull into a circle near the wall ───────────────
+
+local function applyOrbit(bState, speedMult, orbitRadius)
+	local xz = Vector3.new(bState.position.X, 0, bState.position.Z)
+	local dist = xz.Magnitude
+
+	local radialDir
+	if dist < 0.1 then
+		-- Near the centre: kick outward along facing to seed the orbit.
+		radialDir = Vector3.new(math.cos(bState.facingAngle), 0, math.sin(bState.facingAngle))
+		if radialDir.Magnitude < 0.01 then
+			radialDir = Vector3.new(1, 0, 0)
+		end
+	else
+		radialDir = xz.Unit
+	end
+
+	-- Two tangent directions; pick the one matching current motion for continuity.
+	local tangent = Vector3.new(-radialDir.Z, 0, radialDir.X)
+	if bState.velocity:Dot(tangent) < 0 then
+		tangent = -tangent
+	end
+
+	local tangentialSpeed = Constants.RevolveOrbitSpeed * speedMult * bState.mods.Agility
+	local radialError = orbitRadius - dist
+	local radialSpeed = radialError * Constants.RevolveRadialPull
+	if radialSpeed > tangentialSpeed then
+		radialSpeed = tangentialSpeed
+	elseif radialSpeed < -tangentialSpeed then
+		radialSpeed = -tangentialSpeed
+	end
+
+	bState.velocity = tangent * tangentialSpeed + radialDir * radialSpeed
+end
+
+-- ── Bey-vs-Bey collision pass (part-based damage) ─────────────────────────────
+
+local function severityFromSpeed(speed)
+	if speed > Constants.SmashSpeedThreshold then
+		return "Smash"
+	elseif speed > Constants.HeavySpeedThreshold then
+		return "Heavy"
+	end
+	return "Light"
+end
 
 local function doCollisionSubStep(matchState)
 	local beys = {}
@@ -30,6 +136,9 @@ local function doCollisionSubStep(matchState)
 	end
 
 	local threshold = Constants.BeyRadius * 2
+	local rng = TickManager.GetRandom()
+	local vMin, vMax = Constants.CollisionDamageVarianceMin, Constants.CollisionDamageVarianceMax
+	local postClamp = Constants.PostCollisionVelocityClamp
 
 	for i = 1, #beys do
 		for j = i + 1, #beys do
@@ -39,89 +148,68 @@ local function doCollisionSubStep(matchState)
 			local minId = math.min(bA.playerId, bB.playerId)
 			local maxId = math.max(bA.playerId, bB.playerId)
 			local cooldownKey = minId .. "_" .. maxId
-
 			if matchState.collisionCooldowns[cooldownKey] then continue end
 
 			local diff = bA.position - bB.position
 			local dist = diff.Magnitude
+			if dist > threshold then continue end
 
-			if dist <= threshold then
-				local normal = diff.Unit
-				if dist < 0.001 then
-					normal = Vector3.new(1, 0, 0)
-				end
+			local normal = (dist < 0.001) and Vector3.new(1, 0, 0) or diff.Unit -- points B → A
+			local relVel = bA.velocity - bB.velocity
+			local impactSpeed = relVel.Magnitude
 
-				local relVel = bA.velocity - bB.velocity
-				local impactSpeed = relVel.Magnitude
+			-- How hard each Bey drives into the other decides ITS strike severity.
+			local closingA = math.max(0, bA.velocity:Dot(-normal))
+			local closingB = math.max(0, bB.velocity:Dot(normal))
+			local sevA = severityFromSpeed(math.max(closingA, impactSpeed * 0.5))
+			local sevB = severityFromSpeed(math.max(closingB, impactSpeed * 0.5))
+			local overall = severityFromSpeed(impactSpeed)
 
-				local severity = "Light"
-				local stabilityDmg = Constants.StabilityDamageLight
-				local spinDmgMultiplier = 1.0
+			-- Part-based outcomes: A's strike on B, and B's strike on A.
+			local outAB = DamageModel.resolve(bA, bB, sevA)
+			local outBA = DamageModel.resolve(bB, bA, sevB)
 
-				if impactSpeed > Constants.SmashSpeedThreshold then
-					severity = "Smash"
-					stabilityDmg = Constants.StabilityDamageSmash
-					spinDmgMultiplier = Constants.SpinDamageMultiplierSmash
-				elseif impactSpeed > Constants.HeavySpeedThreshold then
-					severity = "Heavy"
-					stabilityDmg = Constants.StabilityDamageHeavy
-					spinDmgMultiplier = Constants.SpinDamageMultiplierHeavy
-				end
+			-- Knockback (scaled by each strike's knock factor / mass ratio).
+			local basePush = math.max(Constants.CollisionPushMin, impactSpeed * Constants.CollisionPushMultiplier)
+			basePush = math.min(basePush, Constants.CollisionPushMax)
+			local ret = Constants.TangentialEnergyRetention
+			bA.velocity = (normal * basePush * outBA.knockScale) + (bA.velocity - bA.velocity:Dot(normal) * normal) * ret
+			bB.velocity = (-normal * basePush * outAB.knockScale) + (bB.velocity - bB.velocity:Dot(normal) * normal) * ret
+			if bA.velocity.Magnitude > postClamp then bA.velocity = bA.velocity.Unit * postClamp end
+			if bB.velocity.Magnitude > postClamp then bB.velocity = bB.velocity.Unit * postClamp end
 
-				-- Craft mods (ADR-003): knockback dealt scales with the striker's
-				-- Attack and inversely with the receiver's GUARD (mostly Defense,
-				-- a little Agility — a nimble Bey takes glancing blows). The mod is
-				-- applied INSIDE the push cap, so no build can knock past ring-out
-				-- speed more than baseline — Attack's real win lever is the
-				-- (uncapped) stability/spin damage below, i.e. wearing the opponent
-				-- down to a wobble collapse, not a binary ring-out. Neutral mods
-				-- == 1 → identical to the validated baseline.
-				-- Command-Attack self-recoil is applied AFTER the cap (the
-				-- attacker's own knockback can exceed it — the existing risk).
-				local guardA = bA.mods.Defense * 0.8 + bA.mods.Agility * 0.2
-				local guardB = bB.mods.Defense * 0.8 + bB.mods.Agility * 0.2
-				local pushForceA = math.clamp(
-					impactSpeed * Constants.CollisionPushMultiplier * (bB.mods.Attack / guardA),
-					Constants.CollisionPushMin, Constants.CollisionPushMax
-				) * (bA.currentCommand == "Attack" and Constants.CommandRecoilMultiplier or 1)
-				local pushForceB = math.clamp(
-					impactSpeed * Constants.CollisionPushMultiplier * (bA.mods.Attack / guardB),
-					Constants.CollisionPushMin, Constants.CollisionPushMax
-				) * (bB.currentCommand == "Attack" and Constants.CommandRecoilMultiplier or 1)
+			local vA = rng and rng:NextNumber(vMin, vMax) or 1.0
+			local vB = rng and rng:NextNumber(vMin, vMax) or 1.0
 
-				local ret = Constants.TangentialEnergyRetention
-				bA.velocity = (normal * pushForceA) + (bA.velocity - bA.velocity:Dot(normal) * normal) * ret
-				bB.velocity = (-normal * pushForceB) + (bB.velocity - bB.velocity:Dot(normal) * normal) * ret
+			-- HP: damage dealt to the defender + self-recoil to the attacker.
+			applyCappedHp(bB, outAB.hpDamage * vB)
+			applyCappedHp(bA, outBA.hpDamage * vA)
+			applyCappedHp(bA, outAB.recoilHp * vB)
+			applyCappedHp(bB, outBA.recoilHp * vA)
 
-				local postClamp = Constants.PostCollisionVelocityClamp
-				if bA.velocity.Magnitude > postClamp then
-					bA.velocity = bA.velocity.Unit * postClamp
-				end
-				if bB.velocity.Magnitude > postClamp then
-					bB.velocity = bB.velocity.Unit * postClamp
-				end
+			-- Destabilization: structural balance + visible tilt.
+			bB.stability = math.max(0, bB.stability - outAB.stabilityDamage * vB)
+			bA.stability = math.max(0, bA.stability - outBA.stabilityDamage * vA)
+			bB.tilt += outAB.tiltAdd * vB
+			bA.tilt += outBA.tiltAdd * vA
 
-				local rng = TickManager.GetRandom()
-				local dmgMultA = rng and rng:NextNumber(Constants.CollisionDamageVarianceMin, Constants.CollisionDamageVarianceMax) or 1.0
-				local dmgMultB = rng and rng:NextNumber(Constants.CollisionDamageVarianceMin, Constants.CollisionDamageVarianceMax) or 1.0
+			-- Spin loss.
+			bB.angularVelocity *= outAB.spinRetain
+			bA.angularVelocity *= outBA.spinRetain
 
-				-- Stability damage taken scales with striker Attack / receiver guard².
-				-- Guard is squared HERE (not on the ring-out push, which stays
-				-- capped) so Defense's real payoff is durability: defenders outlast
-				-- attackers, who then pay their low-Stamina cost — closing the
-				-- Defense→beats→Attack link. Neutral guard == 1 → unchanged.
-				bA.stability = math.max(0, bA.stability - stabilityDmg * dmgMultA * (bB.mods.Attack / guardA ^ 1.5))
-				bB.stability = math.max(0, bB.stability - stabilityDmg * dmgMultB * (bA.mods.Attack / guardB ^ 1.5))
+			-- Mana: the hit-to-charge loop.
+			bA.mana = math.min(bA.maxMana, bA.mana + Constants.ManaGainPerHit)
+			bB.mana = math.min(bB.maxMana, bB.mana + Constants.ManaGainPerHit)
 
-				local spinDmgA = (1 - spinDmgMultiplier) * dmgMultA
-				local spinDmgB = (1 - spinDmgMultiplier) * dmgMultB
-				bA.angularVelocity *= (1 - spinDmgA)
-				bB.angularVelocity *= (1 - spinDmgB)
+			matchState.collisionCooldowns[cooldownKey] = Constants.CollisionCooldownTicks
 
-				matchState.collisionCooldowns[cooldownKey] = Constants.CollisionCooldownTicks
+			checkBreak(matchState, bA)
+			checkBreak(matchState, bB)
 
-				CollisionClassifier.Classify(matchState, bA, bB, severity, bA.position - (normal * Constants.BeyRadius))
-			end
+			CollisionClassifier.Classify(matchState, bA, bB, overall, bA.position - (normal * Constants.BeyRadius), {
+				zoneOnB = outAB.zone,
+				zoneOnA = outBA.zone,
+			})
 		end
 	end
 end
@@ -129,161 +217,108 @@ end
 -- ── Physics phase: sub-step loop ─────────────────────────────────────────────
 
 function PhysicsController.OnPhysicsPhase(matchState)
-	-- Reset classifier counter once per tick (before sub-steps produce events)
-	CollisionClassifier.ResetTickCounter(matchState)
+	CollisionClassifier.ResetTickCounter()
 
 	local tickDt = 1 / Constants.SimulationTickRate
 	local subDt = tickDt / Constants.CollisionSubSteps
-	-- Spatial parameters come from the match's stadium (plan §Phase 3: the
-	-- stadium is the content axis). Classic mirrors Constants exactly.
-	local stadium = Stadiums.get(matchState.stadiumId)
-	local R = stadium.bowlSphereRadius
-	local rimLimit = stadium.playableRadius - (Constants.BeyRadius * stadium.rimBuffer)
-	local bowlForce = stadium.bowlForce
-	-- Derived so (frictionPerSubStep ^ CollisionSubSteps) == FrictionDecay, preserving per-second decay
-	local frictionPerSubStep = Constants.FrictionDecay ^ (1 / Constants.CollisionSubSteps)
+	local subSteps = Constants.CollisionSubSteps
+	local frictionPerSubStep = Constants.StadiumFloorFriction ^ (1 / subSteps)
+	local stadiumRadius = matchState.stadiumRadius or Constants.StadiumRadius
+	local maxDist = stadiumRadius - Constants.BeyRadius
+	-- Keep the orbit a Bey-radius INSIDE the wall (matches Classic's tuned 18 vs
+	-- wall 20), or revolve pins the Bey to the wall and it bounces every sub-step
+	-- (tiny stadiums especially).
+	local orbitRadius = math.min(Constants.RevolveOrbitRadius, maxDist - Constants.BeyRadius)
+	local wallBounce = matchState.stadiumWallBounce or Constants.StadiumWallBounce
+	local floorY = Constants.BeyRadius
 
-	for _ = 1, Constants.CollisionSubSteps do
+	for _ = 1, subSteps do
 		for _, pid in ipairs(matchState.playerOrder) do
 			local bState = matchState.beyStates[pid]
 			if bState.zoneState == "Finished" then continue end
 
-			-- 1. Integrate position with current velocity
-			bState.position += bState.velocity * subDt
+			local dashActive = bState.isDashing and bState.mana > 0
+			local revolveActive = bState.isRevolving and bState.mana > 0
 
-			-- 2. Gravity
-			bState.velocity -= Vector3.new(0, Constants.Gravity * subDt, 0)
-
-			-- 3. Spherical bowl floor clamp: y = R - sqrt(R² - r²)
-			local xzPos = Vector3.new(bState.position.X, 0, bState.position.Z)
-			local xzDist = xzPos.Magnitude
-			local floorY = 0
-			if xzDist < R then
-				floorY = R - math.sqrt(R * R - xzDist * xzDist)
-			end
-			if bState.position.Y <= floorY then
-				bState.position = Vector3.new(bState.position.X, floorY, bState.position.Z)
-				if bState.velocity.Y < 0 then
-					bState.velocity = Vector3.new(bState.velocity.X, 0, bState.velocity.Z)
-				end
-				-- Slope slide: gravity component along bowl curve
-				if xzDist > 0.1 then
-					local slideDir = -xzPos.Unit
-					local slopeAngle = xzDist / math.sqrt(R * R - xzDist * xzDist)
-					bState.velocity += slideDir * (Constants.Gravity * slopeAngle * subDt)
-				end
+			-- 1. Facing — joystick only steers when NEITHER ability is held.
+			if not dashActive and not revolveActive then
+				local turnRate = Constants.FacingTurnSpeed * bState.mods.Agility
+				bState.facingAngle = angleTowards(bState.facingAngle, bState.targetFacing, turnRate * subDt)
 			end
 
-			-- 4. Friction: per-sub-step value preserves the intended per-second deceleration
-			bState.velocity *= frictionPerSubStep
-
-			-- 5. Gentle bowl drift toward center (XZ-only so drift is horizontal).
-			--    Centre pull → ring-out resistance (ADR-003): mostly Defense, a
-			--    little Agility (nimble Beys recover position). Blended so neutral
-			--    == 1 → identical to baseline.
-			local toCenter = Vector3.new(-bState.position.X, 0, -bState.position.Z).Unit
-			if toCenter == toCenter then -- NaN guard: .Unit is NaN when Bey is exactly at centre
-				bState.velocity += toCenter * bowlForce * subDt
-					* (bState.mods.Defense * 0.75 + bState.mods.Agility * 0.25)
-			end
-
-			-- 6. Command steering forces
-			--    Finds the first active opponent for direction reference.
-			local opponentState = nil
-			for _, oid in ipairs(matchState.playerOrder) do
-				if oid ~= pid then
-					local other = matchState.beyStates[oid]
-					if other.zoneState ~= "Finished" then
-						opponentState = other
-						break
-					end
+			-- 2. Movement.
+			if revolveActive then
+				local mult = dashActive and Constants.RevolveComboMultiplier or 1.0
+				applyOrbit(bState, mult, orbitRadius)
+				if bState.velocity.Magnitude > 0.01 then
+					bState.facingAngle = math.atan2(bState.velocity.Z, bState.velocity.X)
 				end
-			end
-
-			if opponentState then
-				local cmd = bState.currentCommand
-				-- Agility scales command steering force → more responsive maneuvers
-				-- (ADR-003). Neutral Agility == 1 → identical to baseline.
-				local agility = bState.mods.Agility
-				if cmd == "Attack" then
-					local toOpponent = (opponentState.position - bState.position).Unit
-					if toOpponent == toOpponent then -- NaN guard: positions identical when beys overlap perfectly
-						bState.velocity += toOpponent * Constants.CommandAttackForce * subDt * agility
-					end
-				elseif cmd == "Defend" then
-					-- Stacks with BowlForce for a stronger centre pull
-					if toCenter == toCenter then
-						bState.velocity += toCenter * Constants.CommandDefendForce * subDt * agility
-					end
-				elseif cmd == "Evade" then
-					-- Matador dodge: mostly sidestep, slight separation. A radial
-					-- flee just runs up the bowl wall and corners the evader at
-					-- the rim (harness: Attack beat radial-Evade 72/21). The
-					-- tangential sidestep makes the attacker's lunge overshoot —
-					-- their momentum, not the evader's, carries toward the rim.
-					local away = bState.position - opponentState.position
-					local awayFlat = Vector3.new(away.X, 0, away.Z).Unit
-					if awayFlat == awayFlat then
-						local tangent = Vector3.new(-awayFlat.Z, 0, awayFlat.X)
-						-- Sidestep toward the side that curves away from the rim
-						if toCenter == toCenter and tangent:Dot(toCenter) < 0 then
-							tangent = -tangent
-						end
-						local dodge = (awayFlat * Constants.EvadeRadialWeight
-							+ tangent * Constants.EvadeTangentialWeight).Unit
-						if dodge == dodge then
-							bState.velocity += dodge * Constants.CommandEvadeForce * subDt * agility
-						end
-					end
-				end
-			end
-
-			-- 7. Rim state transition — grace timer increments once per tick after sub-steps
-			if xzDist > rimLimit then
-				if bState.zoneState == "Active" then
-					bState.zoneState = "RingOut"
-					bState.ringOutTimer = 0
-					table.insert(matchState.tickEvents, {
-						eventType = "RingOutWarning",
-						eventData = { playerId = pid },
-					})
-				end
+			elseif dashActive then
+				local facingDir = Vector3.new(math.cos(bState.facingAngle), 0, math.sin(bState.facingAngle))
+				local dashSpeed = Constants.DashBaseSpeed * Constants.DashSpeedMultiplier * bState.mods.Agility
+				bState.velocity = facingDir * dashSpeed
 			else
-				if bState.zoneState == "RingOut" then
-					bState.zoneState = "Active"
-					bState.ringOutTimer = 0
-					table.insert(matchState.tickEvents, {
-						eventType = "RingOutEscaped",
-						eventData = { playerId = pid },
-					})
+				-- Passive: real-world physics — momentum + friction only. The Bey also
+				-- recharges a small amount of Mana while coasting (lets defensive /
+				-- evasive play sustain instead of starving).
+				bState.velocity *= frictionPerSubStep
+				bState.mana = math.min(bState.maxMana, bState.mana + Constants.ManaRegenPerTick / subSteps)
+			end
+
+			-- 3. Mana drain (distributed across sub-steps so cost is per-tick).
+			if dashActive then
+				bState.mana = math.max(0, bState.mana - Constants.ManaCostDashPerTick / subSteps)
+			end
+			if revolveActive then
+				bState.mana = math.max(0, bState.mana - Constants.ManaCostRevolvePerTick / subSteps)
+			end
+
+			-- 4. Integrate on the flat plane (no gravity; the Bey rides the floor).
+			bState.velocity = Vector3.new(bState.velocity.X, 0, bState.velocity.Z)
+			bState.position += bState.velocity * subDt
+			bState.position = Vector3.new(bState.position.X, floorY, bState.position.Z)
+
+			-- 5. Wall bounce (restitution + facing ricochet) + small impact damage
+			--    + Mana charge. No ring-out: the wall contains and punishes lightly.
+			local xz = Vector3.new(bState.position.X, 0, bState.position.Z)
+			local dist = xz.Magnitude
+			if dist > maxDist and dist > 0.001 then
+				local n = xz.Unit -- outward normal
+				local vn = bState.velocity:Dot(n)
+				if vn > 0 then
+					bState.velocity = bState.velocity - (1 + wallBounce) * vn * n
+
+					-- Impact-scaled punishment: a gentle graze barely matters, a full
+					-- dash into the wall stings (damage, wobble, structural erosion).
+					local scale = math.min(vn / Constants.WallImpactRefSpeed, Constants.WallImpactMaxScale)
+					if scale > 0 then
+						applyCappedHp(bState, Constants.WallHpDamageBase * scale)
+						bState.tilt += Constants.WallTiltBase * scale
+						bState.stability = math.max(0, bState.stability - Constants.WallStabilityBase * scale)
+					end
 				end
-			end
-		end
-
-		-- Run collision detection at updated sub-step positions
-		doCollisionSubStep(matchState)
-	end
-
-	-- Ring-out grace: increment once per simulation tick so RingOutGraceTicks = 10 ≈ 0.33 s at 30 Hz
-	for _, pid in ipairs(matchState.playerOrder) do
-		local bState = matchState.beyStates[pid]
-		if bState.zoneState == "RingOut" then
-			bState.ringOutTimer += 1
-			if bState.ringOutTimer >= Constants.RingOutGraceTicks then
-				bState.zoneState = "Finished"
-				bState.finishReason = "RingOut"
-				bState.velocity = Vector3.new(0, 0, 0)
-				bState.angularVelocity = Vector3.new(0, 0, 0)
+				-- Ricochet the facing so a dash continues along the bounce.
+				local fd = Vector3.new(math.cos(bState.facingAngle), 0, math.sin(bState.facingAngle))
+				local fdn = fd:Dot(n)
+				if fdn > 0 then
+					fd = fd - 2 * fdn * n
+					bState.facingAngle = math.atan2(fd.Z, fd.X)
+				end
+				bState.position = Vector3.new(n.X * maxDist, floorY, n.Z * maxDist)
+				bState.mana = math.min(bState.maxMana, bState.mana + Constants.ManaGainWall)
 				table.insert(matchState.tickEvents, {
-					eventType = "BeyFinished",
-					eventData = { playerId = pid, reason = "RingOut" },
+					eventType = "WallBounce",
+					eventData = { playerId = pid, position = bState.position },
 				})
+				checkBreak(matchState, bState)
 			end
 		end
+
+		doCollisionSubStep(matchState)
 	end
 end
 
--- ── Collision phase: no-op (collision now lives inside OnPhysicsPhase) ────────
+-- ── Collision phase: no-op (collision lives inside OnPhysicsPhase) ────────────
 
 function PhysicsController.OnCollisionPhase()
 end
@@ -302,7 +337,7 @@ function PhysicsController.OnClampPhase(matchState)
 		end
 		if bState.position ~= bState.position then
 			warn("[PhysicsController] NaN position for player " .. tostring(pid) .. ", resetting.")
-			bState.position = Vector3.new(0, 2, 0)
+			bState.position = Vector3.new(0, Constants.BeyRadius, 0)
 		end
 		if bState.velocity.Magnitude > clampMax then
 			bState.velocity = bState.velocity.Unit * clampMax

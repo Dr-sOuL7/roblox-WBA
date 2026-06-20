@@ -36,7 +36,7 @@ local UP = Vector3.new(0, 1, 0)
 
 -- ── Battle state ──────────────────────────────────────────────────────────────
 
-local playableRadius = Constants.BowlPlayableRadius
+local playableRadius = Constants.StadiumRadius
 local arenaOrigin = Vector3.new(0, 0, 0)
 local inBattle = false
 local smoothedCF = nil -- running camera CFrame; nil → snap on the next frame
@@ -44,9 +44,9 @@ local lastSide = Vector3.new(0, 0, 1) -- Side-view continuity (avoids 180° flip
 
 -- ── Camera modes ──────────────────────────────────────────────────────────────
 
-local MODES = { "FirstPerson", "Top", "Side" }
-local MODE_LABELS = { FirstPerson = "FIRST PERSON", Top = "TOP VIEW", Side = "SIDE VIEW" }
-local modeIndex = 3 -- default: Side (cinematic, both Beys framed)
+local MODES = { "Spectator", "Top", "Side", "BeyView" }
+local MODE_LABELS = { Spectator = "SPECTATOR", Top = "TOP VIEW", Side = "SIDE VIEW", BeyView = "BEY VIEW" }
+local modeIndex = 1 -- default: Spectator (isometric, both Beys framed)
 
 local function currentMode()
 	return MODES[modeIndex]
@@ -96,25 +96,7 @@ local function targetCFrame()
 		local eye = center + Vector3.new(0, playableRadius * 2.4, 0)
 		return CFrame.lookAt(eye, center, Vector3.new(0, 0, -1))
 
-	elseif mode == "FirstPerson" then
-		if selfPos then
-			local look = oppPos or center
-			local flat = Vector3.new(look.X - selfPos.X, 0, look.Z - selfPos.Z)
-			if flat.Magnitude < 0.05 then
-				flat = Vector3.new(0, 0, -1)
-			else
-				flat = flat.Unit
-			end
-			-- Eye just above and slightly behind our own Bey, aimed at the
-			-- opponent (a sliver above it so it sits in frame, not at the floor).
-			local eye = selfPos + UP * 2.4 - flat * 3.2
-			return CFrame.lookAt(eye, Vector3.new(look.X, look.Y + 1.0, look.Z))
-		end
-		-- Before models stream in: a low forward shot toward the bowl.
-		local eye = center + Vector3.new(0, playableRadius * 0.6, playableRadius * 1.4)
-		return CFrame.lookAt(eye, center)
-
-	else -- Side
+	elseif mode == "Side" then
 		-- Frame perpendicular to the line between the Beys so both spread across
 		-- the screen; keep the chosen side continuous to avoid 180° flips.
 		local side = lastSide
@@ -132,6 +114,32 @@ local function targetCFrame()
 		lastSide = side
 		local eye = center + side * (playableRadius * 2.2) + UP * (playableRadius * 0.7)
 		return CFrame.lookAt(eye, center + UP * (playableRadius * 0.15))
+
+	elseif mode == "BeyView" then
+		-- Behind our own Bey along its FACING — read from the non-spinning facing
+		-- arrow the renderer maintains, so the camera never rolls with the spin.
+		if selfPos then
+			local fdir = nil
+			local folder = findMatchFolder()
+			local selfModel = folder and folder:FindFirstChild("Bey_" .. tostring(localPlayer.UserId))
+			local arrow = selfModel and selfModel:FindFirstChild("FacingArrow")
+			if arrow then
+				local lv = arrow.CFrame.LookVector
+				fdir = Vector3.new(lv.X, 0, lv.Z)
+			end
+			if (not fdir or fdir.Magnitude < 0.05) and oppPos then
+				fdir = Vector3.new(oppPos.X - selfPos.X, 0, oppPos.Z - selfPos.Z)
+			end
+			fdir = (fdir and fdir.Magnitude > 0.05) and fdir.Unit or Vector3.new(0, 0, -1)
+			local eye = selfPos - fdir * (Constants.BeyRadius + 5.5) + UP * 3.0
+			return CFrame.lookAt(eye, selfPos + fdir * 12 + UP * 0.5)
+		end
+		local eye = center + Vector3.new(0, playableRadius * 0.6, playableRadius * 1.4)
+		return CFrame.lookAt(eye, center)
+
+	else -- Spectator (isometric high angle; both Beys framed)
+		local eye = center + Vector3.new(playableRadius * 1.3, playableRadius * 1.5, playableRadius * 1.3)
+		return CFrame.lookAt(eye, center + UP * (playableRadius * 0.1))
 	end
 end
 
@@ -174,7 +182,7 @@ camHint.Font = Enum.Font.Gotham
 camHint.TextSize = 12
 camHint.TextColor3 = Color3.fromRGB(190, 190, 205)
 camHint.TextStrokeTransparency = 0.6
-camHint.Text = "CAMERA · tap / C"
+camHint.Text = "CAMERA · tap / V"
 camHint.Visible = false
 camHint.Parent = camGui
 
@@ -218,7 +226,7 @@ Remotes.MatchStateChanged.OnClientEvent:Connect(function(phase, data)
 		arenaOrigin = data.arenaOrigin
 	end
 	if data and data.stadiumId then
-		playableRadius = Stadiums.get(data.stadiumId).playableRadius
+		playableRadius = Stadiums.get(data.stadiumId).radius
 	end
 	-- Any in-match phase pins the battle camera. (Finished keeps the lock until
 	-- the character respawns in the hub, but hides the toggle so the result is clean.)
@@ -233,7 +241,7 @@ end)
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed then return end
-	if inBattle and input.KeyCode == Enum.KeyCode.C then
+	if inBattle and (input.KeyCode == Enum.KeyCode.V or input.KeyCode == Enum.KeyCode.C) then
 		cycleMode()
 	end
 end)
@@ -261,7 +269,7 @@ RunService.RenderStepped:Connect(function(dt)
 	else
 		-- Frame-rate-independent smoothing; first person follows tighter since
 		-- the eye rides a fast-moving Bey.
-		local k = (currentMode() == "FirstPerson") and 16 or 9
+		local k = (currentMode() == "BeyView") and 16 or 9
 		local alpha = 1 - math.exp(-k * dt)
 		smoothedCF = smoothedCF:Lerp(target, alpha)
 	end

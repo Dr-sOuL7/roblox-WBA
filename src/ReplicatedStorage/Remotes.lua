@@ -47,7 +47,7 @@ end
 local Remotes = {
 	-- Client to Server
 	RequestLaunch   = getOrCreateRemote("RequestLaunch"),
-	RequestCommand  = getOrCreateRemote("RequestCommand"),
+	InputUpdate     = getOrCreateRemote("InputUpdate"),     -- C→S: continuous analog battle input
 	RequestQueue    = getOrCreateRemote("RequestQueue"),
 	RequestEquip    = getOrCreateRemote("RequestEquip"),
 	RequestReady    = getOrCreateRemote("RequestReady"),

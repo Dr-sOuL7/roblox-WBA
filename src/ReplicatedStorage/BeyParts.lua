@@ -232,4 +232,128 @@ function BeyParts.deriveStats(build)
 	return { fractions = fractions, multipliers = multipliers }
 end
 
+-- ── Battle profile derivation (part-based damage model) ──────────────────────
+-- The 4 stats come from deriveStats (above). The DAMAGE model additionally needs
+-- a PHYSICAL profile — where the blade lands, how the contact concentrates, mass,
+-- structural balance, burst resistance — derived from the SAME parts so a crafted
+-- build drives the battle, not just an archetype bucket. Calibrated so the neutral
+-- (default) build reproduces the validated baseline profile (≈ a balanced Bey).
+
+local function affinityShares(def)
+	local sum = def.a + def.d + def.s + def.g
+	if sum <= 0 then return 0.25, 0.25, 0.25, 0.25 end
+	return def.a / sum, def.d / sum, def.s / sum, def.g / sum
+end
+
+local function weightFraction(slot, weight)
+	local range = BeyParts.LIMITS[slot].weight
+	return (weight - range.min) / (range.max - range.min) -- 0..1
+end
+
+--[=[
+	computeProfile(build) -> profile
+	profile = {
+		loadout (shape ids), mods { Attack, Defense, Stamina, Agility },
+		mass, attackHeight, aggression, width, point, round,
+		burstResistance, integrity, balance, lowCenter, friction,
+	}
+	Accepts a raw or clamped build (clamps internally). Pure — no Roblox APIs.
+]=]
+function BeyParts.computeProfile(build)
+	local clean = BeyParts.clampBuild(build)
+	local mods = BeyParts.deriveStats(clean).multipliers
+
+	local bladeDef = BeyParts.getShape("Blade", clean.Blade.shape)
+	local discDef  = BeyParts.getShape("Disc",  clean.Disc.shape)
+	local coreDef  = BeyParts.getShape("Core",  clean.Core.shape)
+
+	local bA, bD, bS, bG = affinityShares(bladeDef)
+	local _, cD = affinityShares(coreDef)
+	local _, _, dS = affinityShares(discDef)
+
+	local bladeHFrac = heightFraction("Blade", clean.Blade.height)
+	local coreHFrac  = heightFraction("Core",  clean.Core.height)
+	local tipHFrac   = heightFraction("Tip",   clean.Tip.height)
+
+	local discWFrac  = weightFraction("Disc", clean.Disc.weight)
+	local coreWFrac  = weightFraction("Core", clean.Core.weight)
+	local avgWFrac = 0
+	for _, slot in ipairs(BeyParts.SLOTS) do
+		avgWFrac += weightFraction(slot, clean[slot].weight)
+	end
+	avgWFrac /= #BeyParts.SLOTS
+
+	local function c01(v) return math.clamp(v, 0, 1) end
+
+	return {
+		loadout = {
+			blade = clean.Blade.shape, disc = clean.Disc.shape,
+			core = clean.Core.shape, tip = clean.Tip.shape,
+		},
+		mods = mods,
+
+		-- Where the blade lands (0 = tip-low, 1 = upper/core) → contact zone + CoG.
+		attackHeight = c01(0.15 + 0.70 * bladeHFrac + 0.15 * coreHFrac),
+		-- Shape factors ∈ [0,1] from the blade's affinity distribution.
+		aggression = c01(0.30 + 0.90 * bA), -- jagged → burst + recoil
+		width      = c01(0.30 + 0.80 * bD), -- flat/wide → push
+		point      = c01(0.25 + 0.80 * bG), -- sharp → destabilize
+		round      = c01(0.25 + 0.80 * bS), -- smooth → glance + stamina
+
+		mass = math.clamp(0.70 + 0.60 * avgWFrac, 0.76, 1.40),
+		balance = math.clamp(0.92 - 0.20 * discWFrac + 0.10 * dS, 0.70, 0.95),
+		lowCenter = math.clamp(1.20 - 0.40 * tipHFrac, 0.80, 1.20),
+		burstResistance = math.clamp(0.78 + 0.50 * cD + 0.20 * coreWFrac, 0.75, 1.30),
+		integrity = math.clamp(0.78 + 0.50 * cD + 0.20 * coreWFrac, 0.75, 1.30),
+		friction = 1.0,
+	}
+end
+
+-- maxHp depends on a constant outside this pure module; expose a helper so callers
+-- (which already have Constants) finalize it without a circular require.
+function BeyParts.maxHpFor(profile, baseMaxHp)
+	return math.floor(baseMaxHp * (0.60 + 0.40 * profile.mods.Stamina) + 0.5)
+end
+
+-- ── Archetype presets (used by the headless balance gates) ───────────────────
+-- Built from the catalog so they exercise the real derivation. h/w are fractions
+-- (0..1) across each slot's limits.
+local function mk(parts)
+	local build = BeyParts.defaultBuild()
+	for slot, spec in pairs(parts) do
+		local limits = BeyParts.LIMITS[slot]
+		build[slot] = {
+			shape = spec.shape,
+			height = limits.height.min + (limits.height.max - limits.height.min) * (spec.h or 0.5),
+			weight = limits.weight.min + (limits.weight.max - limits.weight.min) * (spec.w or 0.5),
+			color = { 170, 175, 185 },
+		}
+	end
+	return build
+end
+
+BeyParts.PRESETS = {
+	Balanced = BeyParts.defaultBuild(),
+	-- Moderate archetype LEANS (not maxed corners) so the four sit in a viable
+	-- band; a player can push harder with the full catalog if they accept the risk.
+	Attacker = mk({
+		Blade = { shape = "Spike",    h = 0.70, w = 0.60 }, -- tall + jagged → High-zone smash
+		Disc  = { shape = "Cross",    h = 0.50, w = 0.55 },
+		Core  = { shape = "Gem",      h = 0.52, w = 0.50 }, -- balanced core: not a glass jaw
+		Tip   = { shape = "Cone",     h = 0.55, w = 0.48 },
+	}),
+	Defender = mk({
+		Blade = { shape = "Hexa",     h = 0.58, w = 0.52 }, -- a touch taller → more vulnerable
+		Disc  = { shape = "Oval",     h = 0.50, w = 0.52 },
+		Core  = { shape = "Crown",    h = 0.42, w = 0.52 },
+		Tip   = { shape = "Ball",     h = 0.48, w = 0.50 },
+	}),
+	Stamina = mk({
+		Blade = { shape = "Ring",     h = 0.45, w = 0.45 },
+		Disc  = { shape = "Oval",     h = 0.50, w = 0.50 },
+		Core  = { shape = "Orb",      h = 0.45, w = 0.45 },
+		Tip   = { shape = "Ball",     h = 0.42, w = 0.46 },
+	}),
+}
+
 return BeyParts

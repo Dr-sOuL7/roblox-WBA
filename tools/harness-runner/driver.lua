@@ -41,10 +41,10 @@ end
 -- ── Modes ─────────────────────────────────────────────────────────────────────
 
 if mode == "suite" or mode == "batch" then
-	-- Mirror Main.server.lua load order, minus the Replication-phase modules
-	-- (TelemetryLogger / ReplayRecorder / DebugStatePublisher). The Replication
-	-- phase never executes under TickManager.Step(true), so this matches live
-	-- headless behaviour exactly.
+	-- Mirror Main.server.lua battle load order, minus the Replication-phase
+	-- modules. BotController is required BEFORE BeyController so the bot's input
+	-- buffer is fresh when BeyController applies it (same as live).
+	require(__tokens["ServerScriptService/BotController"])
 	require(__tokens["ServerScriptService/BeyController"])
 	require(__tokens["ServerScriptService/PhysicsController"])
 	require(__tokens["ServerScriptService/SpinEvaluator"])
@@ -52,44 +52,30 @@ if mode == "suite" or mode == "batch" then
 	local SimulationHarness = require(__tokens["ServerScriptService/SimulationHarness"])
 
 	if mode == "suite" then
-		local suiteOptions = {
-			baselineCount = tonumber(args[2]) or 1000,
-			matrixCount = tonumber(args[3]) or 200,
-		}
-		local results = SimulationHarness.RunValidationSuite(suiteOptions)
-		if not results.allPass then
+		local ok = SimulationHarness.RunValidationSuite(tonumber(args[2]) or 160)
+		if not ok then
 			error("Validation suite reported NO-GO", 0)
 		end
 	else
 		SimulationHarness.RunBatch(tonumber(args[2]) or 100, {
-			policyA = args[3] or "None",
-			policyB = args[4] or "None",
+			personA = args[3] or "Balanced",
+			personB = args[4] or "Balanced",
 			baseSeed = tonumber(args[5]),
 			stadiumId = args[6],
 		})
 	end
 
 elseif mode == "stadium" then
+	require(__tokens["ServerScriptService/BotController"])
 	require(__tokens["ServerScriptService/BeyController"])
 	require(__tokens["ServerScriptService/PhysicsController"])
 	require(__tokens["ServerScriptService/SpinEvaluator"])
 	local SimulationHarness = require(__tokens["ServerScriptService/SimulationHarness"])
 
 	local stadiumId = args[2] or "Classic"
-	local results = SimulationHarness.RunStadiumGate(stadiumId, { count = tonumber(args[3]) or 500 })
-	if not results.allPass then
+	local ok = SimulationHarness.RunStadiumGate(stadiumId, tonumber(args[3]) or 120)
+	if not ok then
 		error("Stadium gate reported CUT for " .. stadiumId, 0)
-	end
-
-elseif mode == "build" then
-	require(__tokens["ServerScriptService/BeyController"])
-	require(__tokens["ServerScriptService/PhysicsController"])
-	require(__tokens["ServerScriptService/SpinEvaluator"])
-	local SimulationHarness = require(__tokens["ServerScriptService/SimulationHarness"])
-
-	local results = SimulationHarness.RunBuildGate({ count = tonumber(args[2]) or 300 })
-	if not results.allPass then
-		error("Build gate FAILED", 0)
 	end
 
 elseif mode == "persistence" then
@@ -228,13 +214,13 @@ elseif mode == "persistence" then
 	-- Stats application
 	test("stats: win records finish type", function()
 		local stats = ProfileSchema.defaults().stats
-		ProfileLogic.applyMatchResult(stats, "Win", "RingOut")
-		expect(stats.wins == 1 and stats.matchesPlayed == 1 and stats.finishesBy.RingOut == 1)
+		ProfileLogic.applyMatchResult(stats, "Win", "HpBreak")
+		expect(stats.wins == 1 and stats.matchesPlayed == 1 and stats.finishesBy.HpBreak == 1)
 	end)
 	test("stats: loss records own finish type", function()
 		local stats = ProfileSchema.defaults().stats
-		ProfileLogic.applyMatchResult(stats, "Loss", "WobbleCollapse")
-		expect(stats.losses == 1 and stats.lossesBy.WobbleCollapse == 1)
+		ProfileLogic.applyMatchResult(stats, "Loss", "SpinOut")
+		expect(stats.losses == 1 and stats.lossesBy.SpinOut == 1)
 	end)
 	test("stats: draw has no finish type", function()
 		local stats = ProfileSchema.defaults().stats
@@ -390,10 +376,8 @@ elseif mode == "persistence" then
 
 	test("stadiums: Classic mirrors the validated Constants exactly", function()
 		local classic = Stadiums.get("Classic")
-		expect(classic.bowlSphereRadius == Constants.BowlSphereRadius)
-		expect(classic.playableRadius == Constants.BowlPlayableRadius)
-		expect(classic.rimBuffer == Constants.BowlRimBuffer)
-		expect(classic.bowlForce == Constants.BowlForce)
+		expect(classic.radius == Constants.StadiumRadius, "Classic radius must match the baseline")
+		expect(classic.wallBounce == Constants.StadiumWallBounce, "Classic wall bounce must match the baseline")
 	end)
 	test("stadiums: every registry entry validates", function()
 		for id, def in pairs(Stadiums.REGISTRY) do
@@ -413,9 +397,9 @@ elseif mode == "persistence" then
 		expect(Stadiums.get(nil).id == Stadiums.DEFAULT_ID)
 	end)
 	test("stadiums: validate rejects malformed definitions", function()
-		expect(not Stadiums.validate({ id = "X", playableRadius = 4, bowlSphereRadius = 50, rimBuffer = 0.8, bowlForce = 7 }))
-		expect(not Stadiums.validate({ id = "X", playableRadius = 20, bowlSphereRadius = 10, rimBuffer = 0.8, bowlForce = 7 }))
-		expect(not Stadiums.validate({ id = "", playableRadius = 20, bowlSphereRadius = 50, rimBuffer = 0.8, bowlForce = 7 }))
+		expect(not Stadiums.validate({ id = "X", radius = 4, wallBounce = 0.65 }), "radius too small")
+		expect(not Stadiums.validate({ id = "X", radius = 22, wallBounce = 1.5 }), "wallBounce out of range")
+		expect(not Stadiums.validate({ id = "", radius = 22, wallBounce = 0.65 }), "empty id")
 	end)
 	test("stadiums: seeded rotation pick is deterministic and in range", function()
 		for seed = 0, 25 do

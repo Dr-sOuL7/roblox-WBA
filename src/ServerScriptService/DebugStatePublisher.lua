@@ -41,8 +41,16 @@ function DebugStatePublisher.OnReplicationPhase(matchState)
             tilt = bState.tilt,
             stability = bState.stability,
             zoneState = bState.zoneState,
-            currentCommand = bState.currentCommand,
-            commandCooldownTimer = bState.commandCooldownTimer,
+            finishReason = bState.finishReason,
+            -- HP / Mana (HUD bars)
+            hp = bState.hp,
+            maxHp = bState.maxHp,
+            mana = bState.mana,
+            maxMana = bState.maxMana,
+            -- Facing + abilities (facing arrow, dash/revolve glow)
+            facingAngle = bState.facingAngle,
+            isDashing = bState.isDashing,
+            isRevolving = bState.isRevolving,
         }
     end
 
